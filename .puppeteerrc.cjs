@@ -2,6 +2,6 @@
 
 import { join } from "path";
 
-module.exports = {
-  cacheDirectory: join(__dirname, ".cache", "puppeteer"),
+export default {
+  cacheDirectory: join(process.cwd(), ".cache", "puppeteer"),
 };
