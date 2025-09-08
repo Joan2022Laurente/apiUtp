@@ -79,7 +79,7 @@ async function scrapearEventosUTP(username, password) {
   console.log("✅ Redirección exitosa después de login. URL actual:", page.url());
 
   // Esperar a que cargue el dashboard
-  await page.waitForTimeout(2000);
+  await new Promise(resolve => setTimeout(resolve, 2000)); // Reemplaza waitForTimeout
 
   // Hacer clic en Calendario
   await page.evaluate(() => {
@@ -100,7 +100,7 @@ async function scrapearEventosUTP(username, password) {
   console.log("✅ Cambiado a vista semanal");
 
   // Esperar a que se actualice la vista semanal
-  await page.waitForTimeout(3000);
+  await new Promise(resolve => setTimeout(resolve, 3000)); // Reemplaza waitForTimeout
 
   // Extraer eventos
   const eventos = await page.evaluate(() => {
