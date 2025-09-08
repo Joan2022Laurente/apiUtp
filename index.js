@@ -35,7 +35,6 @@ app.post('/api/eventos', async (req, res) => {
 
 // Función para scrapear eventos
 async function scrapearEventosUTP(username, password) {
-  // Configurar Chromium
   chromium.setGraphicsMode = false;
 
   const browser = await puppeteer.launch({
@@ -47,42 +46,63 @@ async function scrapearEventosUTP(username, password) {
 
   const page = await browser.newPage();
 
-  // Configurar el viewport
-  await page.setViewport({ width: 1920, height: 1080 });
+  // Configurar user-agent para simular un navegador real
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
   // Ir a Class UTP
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
+  console.log("🔹 [Paso 1] URL después de goto:", page.url()); // Verifica la URL después de cargar la página inicial
+
+  // Esperar a que el selector #username esté disponible
+  try {
+    await page.waitForSelector("#username", { timeout: 30000 });
+    console.log("✅ [Paso 2] Selector #username encontrado. URL actual:", page.url());
+  } catch (error) {
+    console.error("❌ [Paso 2] Error: No se encontró #username. URL actual:", page.url());
+    throw new Error(`No se encontró el selector #username. URL actual: ${page.url()}`);
+  }
 
   // Login
-  await page.waitForSelector("#username");
   await page.type("#username", username);
   await page.type("#password", password);
+  console.log("🔹 [Paso 3] Credenciales ingresadas. URL actual:", page.url());
+
   await page.click("#kc-login");
+  console.log("🔹 [Paso 4] Botón de login clickeado. URL actual:", page.url());
 
   // Esperar redirección
   try {
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 });
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+    console.log("✅ [Paso 5] Redirección exitosa después de login. URL actual:", page.url());
   } catch (e) {
-    throw new Error("Error al iniciar sesión. Verifica tus credenciales.");
+    console.error("❌ [Paso 5] Error al esperar redirección. URL actual:", page.url());
+    throw new Error(`Error al iniciar sesión. URL actual: ${page.url()}`);
   }
-
-  console.log("✅ Logueado en Class UTP");
 
   // Esperar a que cargue el dashboard
   await new Promise(resolve => setTimeout(resolve, 2000));
+  console.log("🔹 [Paso 6] Esperando dashboard. URL actual:", page.url());
 
   // Hacer clic en Calendario
-  await page.evaluate(() => {
-    const link = document.querySelector('a[title="Calendario"]');
-    if (link) link.click();
-    else throw new Error("No se encontró el enlace del calendario.");
-  });
+  try {
+    await page.evaluate(() => {
+      const link = document.querySelector('a[title="Calendario"]');
+      if (link) link.click();
+      else throw new Error("No se encontró el enlace del calendario.");
+    });
+    console.log("✅ [Paso 7] Clic en Calendario. URL actual:", page.url());
+  } catch (error) {
+    console.error("❌ [Paso 7] Error al hacer clic en Calendario. URL actual:", page.url());
+    throw new Error(`No se encontró el enlace del calendario. URL actual: ${page.url()}`);
+  }
 
   // Esperar a que aparezcan los eventos
   try {
-    await page.waitForSelector('.fc-timegrid-event-harness', { timeout: 10000 });
+    await page.waitForSelector('.fc-timegrid-event-harness', { timeout: 30000 });
+    console.log("✅ [Paso 8] Eventos del calendario encontrados. URL actual:", page.url());
   } catch (e) {
-    throw new Error("No se encontraron eventos en el calendario.");
+    console.error("❌ [Paso 8] Error al esperar eventos. URL actual:", page.url());
+    throw new Error(`No se encontraron eventos en el calendario. URL actual: ${page.url()}`);
   }
 
   // Cambiar a vista semanal
@@ -90,6 +110,7 @@ async function scrapearEventosUTP(username, password) {
     const weekButton = document.querySelector('.fc-timeGridWeek-button, .fc-week-button');
     if (weekButton) weekButton.click();
   });
+  console.log("🔹 [Paso 9] Cambiado a vista semanal. URL actual:", page.url());
 
   // Esperar a que se actualice la vista
   await new Promise(resolve => setTimeout(resolve, 2000));
