@@ -11,7 +11,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "install-chromium": "puppeteer browsers install chromium@stable --path=/usr/bin/chromium-browser",
+    "install-chromium": "puppeteer browsers install chromium@latest --path=/usr/bin/chromium-browser",
     "prestart": "npm run install-chromium"
   },
   "keywords": [],
