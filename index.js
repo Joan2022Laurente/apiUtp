@@ -1,6 +1,7 @@
-const express = require('express');
-const puppeteer = require('puppeteer');
-const cors = require('cors');
+import express from 'express';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
+import cors from 'cors';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -34,17 +35,14 @@ app.post('/api/eventos', async (req, res) => {
 
 // Función para scrapear eventos
 async function scrapearEventosUTP(username, password) {
+  // Configurar Chromium
+  chromium.setGraphicsMode = false;
+
   const browser = await puppeteer.launch({
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--single-process',
-    ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
   });
 
   const page = await browser.newPage();
