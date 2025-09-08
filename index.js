@@ -33,14 +33,26 @@ app.post('/api/eventos', async (req, res) => {
   }
 });
 
-// Función para scrapear eventos
+// Función para scrapear eventos (versión para Render)
 async function scrapearEventosUTP(username, password) {
+  // Configurar Chromium para Render
   chromium.setGraphicsMode = false;
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
+    args: [
+      ...chromium.args,
+      '--window-size=1920,1080', // Tamaño de ventana grande
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+    ],
+    defaultViewport: {
+      width: 1920,
+      height: 1080,
+    },
     executablePath: await chromium.executablePath(),
   });
 
@@ -51,69 +63,44 @@ async function scrapearEventosUTP(username, password) {
 
   // Ir a Class UTP
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
-  console.log("🔹 [Paso 1] URL después de goto:", page.url()); // Verifica la URL después de cargar la página inicial
+  console.log("🔹 URL después de goto:", page.url());
 
   // Esperar a que el selector #username esté disponible
-  try {
-    await page.waitForSelector("#username", { timeout: 30000 });
-    console.log("✅ [Paso 2] Selector #username encontrado. URL actual:", page.url());
-  } catch (error) {
-    console.error("❌ [Paso 2] Error: No se encontró #username. URL actual:", page.url());
-    throw new Error(`No se encontró el selector #username. URL actual: ${page.url()}`);
-  }
+  await page.waitForSelector("#username", { timeout: 30000 });
+  console.log("✅ Selector #username encontrado");
 
   // Login
   await page.type("#username", username);
   await page.type("#password", password);
-  console.log("🔹 [Paso 3] Credenciales ingresadas. URL actual:", page.url());
-
   await page.click("#kc-login");
-  console.log("🔹 [Paso 4] Botón de login clickeado. URL actual:", page.url());
 
   // Esperar redirección
-  try {
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
-    console.log("✅ [Paso 5] Redirección exitosa después de login. URL actual:", page.url());
-  } catch (e) {
-    console.error("❌ [Paso 5] Error al esperar redirección. URL actual:", page.url());
-    throw new Error(`Error al iniciar sesión. URL actual: ${page.url()}`);
-  }
+  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+  console.log("✅ Redirección exitosa después de login. URL actual:", page.url());
 
   // Esperar a que cargue el dashboard
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  console.log("🔹 [Paso 6] Esperando dashboard. URL actual:", page.url());
+  await page.waitForTimeout(2000);
 
   // Hacer clic en Calendario
-  try {
-    await page.evaluate(() => {
-      const link = document.querySelector('a[title="Calendario"]');
-      if (link) link.click();
-      else throw new Error("No se encontró el enlace del calendario.");
-    });
-    console.log("✅ [Paso 7] Clic en Calendario. URL actual:", page.url());
-  } catch (error) {
-    console.error("❌ [Paso 7] Error al hacer clic en Calendario. URL actual:", page.url());
-    throw new Error(`No se encontró el enlace del calendario. URL actual: ${page.url()}`);
-  }
+  await page.evaluate(() => {
+    const link = document.querySelector('a[title="Calendario"]');
+    if (link) link.click();
+    else throw new Error("No se encontró el enlace del calendario.");
+  });
+  console.log("✅ Clic en Calendario");
 
-  // Esperar a que aparezcan los eventos
-  try {
-    await page.waitForSelector('.fc-timegrid-event-harness', { timeout: 30000 });
-    console.log("✅ [Paso 8] Eventos del calendario encontrados. URL actual:", page.url());
-  } catch (e) {
-    console.error("❌ [Paso 8] Error al esperar eventos. URL actual:", page.url());
-    throw new Error(`No se encontraron eventos en el calendario. URL actual: ${page.url()}`);
-  }
+  // Esperar a que aparezcan los eventos del calendario
+  await page.waitForSelector('.fc-timegrid-event-harness', { timeout: 30000 });
 
   // Cambiar a vista semanal
   await page.evaluate(() => {
     const weekButton = document.querySelector('.fc-timeGridWeek-button, .fc-week-button');
     if (weekButton) weekButton.click();
   });
-  console.log("🔹 [Paso 9] Cambiado a vista semanal. URL actual:", page.url());
+  console.log("✅ Cambiado a vista semanal");
 
-  // Esperar a que se actualice la vista
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // Esperar a que se actualice la vista semanal
+  await page.waitForTimeout(3000);
 
   // Extraer eventos
   const eventos = await page.evaluate(() => {
@@ -129,18 +116,16 @@ async function scrapearEventosUTP(username, password) {
         lista.push({
           tipo: "Actividad",
           nombreActividad: event.querySelector('[data-testid="activity-name-text"]')?.innerText.trim() ||
-                           event.querySelector('[data-tip^="🔴"]')?.getAttribute('data-tip') ||
+                           event.querySelector('[data-tip^="🔴"]')?.getAttribute("data-tip") ||
                            event.querySelector('p.font-black')?.innerText.trim(),
-          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim() ||
-                 event.querySelector('[data-tip*="Seguridad"]')?.getAttribute('data-tip'),
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim(),
           hora: event.querySelector('.mt-xsm.text-neutral-03.text-small-02')?.innerText.trim(),
           estado: event.querySelector('.truncate')?.innerText.trim(),
         });
       } else if (isClass) {
         lista.push({
           tipo: "Clase",
-          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim() ||
-                 event.querySelector('p.font-black')?.innerText.trim(),
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim(),
           hora: event.querySelector('.mt-sm.text-neutral-04.text-small-02')?.innerText.trim(),
           modalidad: event.querySelector('span.font-bold.text-body.rounded-lg')?.innerText.trim(),
         });
