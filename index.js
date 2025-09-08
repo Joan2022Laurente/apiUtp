@@ -1,23 +1,22 @@
-import puppeteer from "puppeteer";
-import cors from "cors";
-import express from "express";
+const express = require('express');
+const puppeteer = require('puppeteer');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware para parsear JSON y habilitar CORS
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // Ruta POST para obtener eventos
-app.post("/api/eventos", async (req, res) => {
+app.post('/api/eventos', async (req, res) => {
   const { username, password } = req.body;
 
-  // Validar que se hayan enviado credenciales
   if (!username || !password) {
     return res.status(400).json({
       success: false,
-      error: "Se requieren usuario y contraseña.",
+      error: "Se requieren usuario y contraseña."
     });
   }
 
@@ -28,18 +27,26 @@ app.post("/api/eventos", async (req, res) => {
     console.error("Error al scrapear eventos:", error);
     res.status(500).json({
       success: false,
-      error:
-        "Error al obtener eventos. Verifica tus credenciales o intenta más tarde.",
+      error: "Error al obtener eventos. Verifica tus credenciales o intenta más tarde."
     });
   }
 });
 
-// Función para scrapear eventos (ahora recibe username y password como parámetros)
+// Función para scrapear eventos
 async function scrapearEventosUTP(username, password) {
   const browser = await puppeteer.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--single-process',
+    ],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
   });
+
   const page = await browser.newPage();
 
   // Configurar el viewport
@@ -48,7 +55,7 @@ async function scrapearEventosUTP(username, password) {
   // Ir a Class UTP
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
 
-  // Login con las credenciales recibidas
+  // Login
   await page.waitForSelector("#username");
   await page.type("#username", username);
   await page.type("#password", password);
@@ -64,7 +71,7 @@ async function scrapearEventosUTP(username, password) {
   console.log("✅ Logueado en Class UTP");
 
   // Esperar a que cargue el dashboard
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, 2000));
 
   // Hacer clic en Calendario
   await page.evaluate(() => {
@@ -75,93 +82,57 @@ async function scrapearEventosUTP(username, password) {
 
   // Esperar a que aparezcan los eventos
   try {
-    await page.waitForSelector(".fc-timegrid-event-harness", {
-      timeout: 10000,
-    });
+    await page.waitForSelector('.fc-timegrid-event-harness', { timeout: 10000 });
   } catch (e) {
     throw new Error("No se encontraron eventos en el calendario.");
   }
 
   // Cambiar a vista semanal
   await page.evaluate(() => {
-    const weekButton = document.querySelector(
-      ".fc-timeGridWeek-button, .fc-week-button"
-    );
+    const weekButton = document.querySelector('.fc-timeGridWeek-button, .fc-week-button');
     if (weekButton) weekButton.click();
   });
 
   // Esperar a que se actualice la vista
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, 2000));
 
   // Extraer eventos
   const eventos = await page.evaluate(() => {
     const lista = [];
-    document
-      .querySelectorAll(".fc-timegrid-event-harness")
-      .forEach((harnes) => {
-        const event = harnes.querySelector(".fc-timegrid-event");
-        if (!event) return;
+    document.querySelectorAll('.fc-timegrid-event-harness').forEach(harnes => {
+      const event = harnes.querySelector('.fc-timegrid-event');
+      if (!event) return;
 
-        // Diferenciar por el contenedor principal
-        const isActivity =
-          event.querySelector(
-            '[data-testid="single-day-activity-card-container"]'
-          ) !== null;
-        const isClass =
-          event.querySelector(
-            '[data-testid="single-day-event-card-container"]'
-          ) !== null;
+      const isActivity = event.querySelector('[data-testid="single-day-activity-card-container"]') !== null;
+      const isClass = event.querySelector('[data-testid="single-day-event-card-container"]') !== null;
 
-        if (isActivity) {
-          // Es una actividad
-          lista.push({
-            tipo: "Actividad",
-            nombreActividad:
-              event
-                .querySelector('[data-testid="activity-name-text"]')
-                ?.innerText.trim() ||
-              event
-                .querySelector('[data-tip^="🔴"]')
-                ?.getAttribute("data-tip") ||
-              event.querySelector("p.font-black")?.innerText.trim(),
-            curso:
-              event
-                .querySelector('[data-testid="course-name-text"]')
-                ?.innerText.trim() ||
-              event
-                .querySelector('[data-tip*="Seguridad"]')
-                ?.getAttribute("data-tip"),
-            hora: event
-              .querySelector(".mt-xsm.text-neutral-03.text-small-02")
-              ?.innerText.trim(),
-            estado: event.querySelector(".truncate")?.innerText.trim(),
-          });
-        } else if (isClass) {
-          // Es una clase
-          lista.push({
-            tipo: "Clase",
-            curso:
-              event
-                .querySelector('[data-testid="course-name-text"]')
-                ?.innerText.trim() ||
-              event.querySelector("p.font-black")?.innerText.trim(),
-            hora: event
-              .querySelector(".mt-sm.text-neutral-04.text-small-02")
-              ?.innerText.trim(),
-            modalidad: event
-              .querySelector("span.font-bold.text-body.rounded-lg")
-              ?.innerText.trim(),
-          });
-        } else {
-          // Evento sin clasificación clara (ej: foros)
-          lista.push({
-            tipo: "Otro",
-            nombre:
-              event.querySelector("p.font-black")?.innerText.trim() ||
-              event.querySelector("p")?.innerText.trim(),
-          });
-        }
-      });
+      if (isActivity) {
+        lista.push({
+          tipo: "Actividad",
+          nombreActividad: event.querySelector('[data-testid="activity-name-text"]')?.innerText.trim() ||
+                           event.querySelector('[data-tip^="🔴"]')?.getAttribute('data-tip') ||
+                           event.querySelector('p.font-black')?.innerText.trim(),
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim() ||
+                 event.querySelector('[data-tip*="Seguridad"]')?.getAttribute('data-tip'),
+          hora: event.querySelector('.mt-xsm.text-neutral-03.text-small-02')?.innerText.trim(),
+          estado: event.querySelector('.truncate')?.innerText.trim(),
+        });
+      } else if (isClass) {
+        lista.push({
+          tipo: "Clase",
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim() ||
+                 event.querySelector('p.font-black')?.innerText.trim(),
+          hora: event.querySelector('.mt-sm.text-neutral-04.text-small-02')?.innerText.trim(),
+          modalidad: event.querySelector('span.font-bold.text-body.rounded-lg')?.innerText.trim(),
+        });
+      } else {
+        lista.push({
+          tipo: "Otro",
+          nombre: event.querySelector('p.font-black')?.innerText.trim() ||
+                  event.querySelector('p')?.innerText.trim(),
+        });
+      }
+    });
     return lista;
   });
 
