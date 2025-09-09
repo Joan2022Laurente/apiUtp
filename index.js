@@ -66,13 +66,13 @@ async function scrapearEventosUTP(username, password) {
 
   // Ir a Class UTP
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
-  await page.waitForSelector("#username", { timeout: 30000 });
+  await page.waitForSelector("#username", { timeout: 2000 });
 
   // Login
   await page.type("#username", username);
   await page.type("#password", password);
   await page.click("#kc-login");
-  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 2000 });
 
   // Esperar dashboard
   await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -92,14 +92,14 @@ async function scrapearEventosUTP(username, password) {
     else throw new Error("No se encontró el enlace del calendario.");
   });
 
-  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 30000 });
+  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 2000 });
   await page.evaluate(() => {
     const weekButton = document.querySelector(
       ".fc-timeGridWeek-button, .fc-week-button"
     );
     if (weekButton) weekButton.click();
   });
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 
   // Extraer eventos
   const eventos = await page.evaluate(() => {
