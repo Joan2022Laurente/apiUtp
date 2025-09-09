@@ -169,6 +169,167 @@ async function scrapearEventosUTP(username, password) {
   return { nombreEstudiante, eventos };
 }
 
+// ===================================================
+// 🔹 NUEVA RUTA SSE (envía datos por partes)
+// ===================================================
+app.get("/api/eventos-stream", async (req, res) => {
+  const { username, password } = req.query;
+
+  if (!username || !password) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    return res.end(
+      JSON.stringify({
+        success: false,
+        error: "Se requieren usuario y contraseña.",
+      })
+    );
+  }
+
+  // Headers para SSE
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    chromium.setGraphicsMode = false;
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        ...chromium.args,
+        "--window-size=1920,1080",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+      ],
+      defaultViewport: { width: 1920, height: 1080 },
+      executablePath: await chromium.executablePath(),
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    );
+
+    // Paso 1: Navegar
+    send("estado", { mensaje: "Navegando a Class UTP..." });
+    await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
+    await page.waitForSelector("#username", { timeout: 30000 });
+
+    // Paso 2: Login
+    send("estado", { mensaje: "Iniciando sesión..." });
+    await page.type("#username", username);
+    await page.type("#password", password);
+    await page.click("#kc-login");
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // Paso 3: Nombre del estudiante
+    const nombreEstudiante = await page.evaluate(() => {
+      const nombre = document.querySelector(".text-body.font-bold");
+      return nombre ? nombre.innerText.trim() : null;
+    });
+    send("nombre", { nombreEstudiante });
+
+    // Paso 4: Calendario
+    send("estado", { mensaje: "Abriendo calendario..." });
+    await page.evaluate(() => {
+      const link = document.querySelector('a[title="Calendario"]');
+      if (link) link.click();
+      else throw new Error("No se encontró el enlace del calendario.");
+    });
+
+    await page.waitForSelector(".fc-timegrid-event-harness", {
+      timeout: 30000,
+    });
+    await page.evaluate(() => {
+      const weekButton = document.querySelector(
+        ".fc-timeGridWeek-button, .fc-week-button"
+      );
+      if (weekButton) weekButton.click();
+    });
+    await new Promise((r) => setTimeout(r, 3000));
+
+    // Paso 5: Eventos
+    const eventos = await page.evaluate(() => {
+      const lista = [];
+      document.querySelectorAll(".fc-timegrid-event-harness").forEach((h) => {
+        const event = h.querySelector(".fc-timegrid-event");
+        if (!event) return;
+
+        const isActivity =
+          event.querySelector(
+            '[data-testid="single-day-activity-card-container"]'
+          ) !== null;
+        const isClass =
+          event.querySelector(
+            '[data-testid="single-day-event-card-container"]'
+          ) !== null;
+
+        if (isActivity) {
+          lista.push({
+            tipo: "Actividad",
+            nombreActividad:
+              event
+                .querySelector('[data-testid="activity-name-text"]')
+                ?.innerText.trim() ||
+              event
+                .querySelector('[data-tip^="🔴"]')
+                ?.getAttribute("data-tip") ||
+              event.querySelector("p.font-black")?.innerText.trim(),
+            curso: event
+              .querySelector('[data-testid="course-name-text"]')
+              ?.innerText.trim(),
+            hora: event
+              .querySelector(".mt-xsm.text-neutral-03.text-small-02")
+              ?.innerText.trim(),
+            estado: event.querySelector(".truncate")?.innerText.trim(),
+          });
+        } else if (isClass) {
+          lista.push({
+            tipo: "Clase",
+            curso: event
+              .querySelector('[data-testid="course-name-text"]')
+              ?.innerText.trim(),
+            hora: event
+              .querySelector(".mt-sm.text-neutral-04.text-small-02")
+              ?.innerText.trim(),
+            modalidad: event
+              .querySelector("span.font-bold.text-body.rounded-lg")
+              ?.innerText.trim(),
+          });
+        } else {
+          lista.push({
+            tipo: "Otro",
+            nombre:
+              event.querySelector("p.font-black")?.innerText.trim() ||
+              event.querySelector("p")?.innerText.trim(),
+          });
+        }
+      });
+      return lista;
+    });
+
+    send("eventos", { eventos });
+
+    await browser.close();
+    send("fin", { mensaje: "Scraping finalizado ✅" });
+    res.end();
+  } catch (error) {
+    console.error("Error en SSE:", error);
+    send("error", { mensaje: error.message });
+    res.end();
+  }
+});
+
 // Iniciar el servidor
 app.listen(PORT, () => {
   console.log(`Servidor API escuchando en el puerto ${PORT}`);
