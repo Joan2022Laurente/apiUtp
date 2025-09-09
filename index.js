@@ -64,17 +64,6 @@ async function scrapearEventosUTP(username, password) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
   );
 
-
-    // 🔹 Bloquear recursos innecesarios (CSS, imágenes, fuentes)
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    const resourceType = req.resourceType();
-    if (["image", "stylesheet", "font", "media"].includes(resourceType)) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
   // Ir a Class UTP
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
   await page.waitForSelector("#username", { timeout: 30000 });
