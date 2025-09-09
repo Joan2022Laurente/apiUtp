@@ -37,7 +37,6 @@ app.post("/api/eventos", async (req, res) => {
 async function scrapearEventosUTP(username, password) {
   chromium.setGraphicsMode = false;
 
-  // 🔹 Configuración optimizada de Puppeteer
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -58,7 +57,7 @@ async function scrapearEventosUTP(username, password) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
   );
 
-  // 🔹 Bloquear recursos innecesarios
+  // Bloquear recursos innecesarios
   await page.setRequestInterception(true);
   page.on("request", (req) => {
     if (["image", "stylesheet", "font"].includes(req.resourceType())) {
@@ -68,11 +67,11 @@ async function scrapearEventosUTP(username, password) {
     }
   });
 
-  // 🔹 Navegación optimizada
+  // Navegar a la página de login
   await page.goto("https://class.utp.edu.pe/", { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#username", { timeout: 10000 });
 
-  // 🔹 Login
+  // Login
   await page.type("#username", username);
   await page.type("#password", password);
   await Promise.all([
@@ -80,28 +79,49 @@ async function scrapearEventosUTP(username, password) {
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }),
   ]);
 
-  // 🔹 Esperar dashboard y extraer nombre del estudiante
+  // Verificar que el login fue exitoso
+  const urlAfterLogin = page.url();
+  if (!urlAfterLogin.includes("dashboard") && !urlAfterLogin.includes("calendario")) {
+    throw new Error("Login fallido: Verifica tus credenciales.");
+  }
+
+  // Extraer nombre del estudiante
   const nombreEstudiante = await page.evaluate(() => {
     const nombre = document.querySelector(".text-body.font-bold");
     return nombre ? nombre.innerText.trim() : null;
   });
-  console.log("✅ Nombre del estudiante:", nombreEstudiante);
+  console.log("Nombre del estudiante:", nombreEstudiante);
 
-  // 🔹 Navegar a Calendario
+  // Navegar a Calendario
   await page.evaluate(() => {
     const link = document.querySelector('a[title="Calendario"]');
     if (link) link.click();
+    else throw new Error("No se encontró el enlace del calendario.");
   });
-  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 10000 });
 
-  // 🔹 Cambiar a vista semanal
+  // Esperar a que la vista del calendario esté cargada
+  await page.waitForFunction(
+    () => document.querySelector(".fc-view-harness") !== null,
+    { timeout: 15000 }
+  );
+
+  // Cambiar a vista semanal
   await page.evaluate(() => {
     const weekButton = document.querySelector(".fc-timeGridWeek-button, .fc-week-button");
     if (weekButton) weekButton.click();
+    else throw new Error("No se encontró el botón de vista semanal.");
   });
-  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 10000 });
 
-  // 🔹 Extraer eventos (en una sola llamada a page.evaluate)
+  // Esperar a que los eventos estén cargados
+  await page.waitForFunction(
+    () => {
+      const events = document.querySelectorAll(".fc-timegrid-event-harness");
+      return events.length > 0;
+    },
+    { timeout: 15000 }
+  );
+
+  // Extraer eventos
   const eventos = await page.evaluate(() => {
     const lista = [];
     document.querySelectorAll(".fc-timegrid-event-harness").forEach((harnes) => {
@@ -142,6 +162,7 @@ async function scrapearEventosUTP(username, password) {
   await browser.close();
   return { nombreEstudiante, eventos };
 }
+
 
 // 🔹 Iniciar el servidor
 app.listen(PORT, () => {
