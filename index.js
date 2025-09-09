@@ -3,6 +3,7 @@ import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
 
+// Configuración del servidor
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -13,7 +14,6 @@ app.use(express.json());
 // Ruta POST para obtener eventos
 app.post("/api/eventos", async (req, res) => {
   const { username, password } = req.body;
-
   if (!username || !password) {
     return res.status(400).json({
       success: false,
@@ -22,40 +22,34 @@ app.post("/api/eventos", async (req, res) => {
   }
 
   try {
-    const { nombreEstudiante, eventos } = await scrapearEventosUTP(
-      username,
-      password
-    );
+    const { nombreEstudiante, eventos } = await scrapearEventosUTP(username, password);
     res.json({ success: true, nombreEstudiante, eventos });
   } catch (error) {
     console.error("Error al scrapear eventos:", error);
     res.status(500).json({
       success: false,
-      error:
-        "Error al obtener eventos. Verifica tus credenciales o intenta más tarde.",
+      error: "Error al obtener eventos. Verifica tus credenciales o intenta más tarde.",
     });
   }
 });
 
-// Función para scrapear eventos (versión para Render)
+// Función para scrapear eventos (versión optimizada)
 async function scrapearEventosUTP(username, password) {
   chromium.setGraphicsMode = false;
 
+  // 🔹 Configuración optimizada de Puppeteer
   const browser = await puppeteer.launch({
     headless: true,
     args: [
       ...chromium.args,
-      "--window-size=1920,1080",
+      "--window-size=1280,800",
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-accelerated-2d-canvas",
       "--disable-gpu",
+      "--single-process",
     ],
-    defaultViewport: {
-      width: 1920,
-      height: 1080,
-    },
     executablePath: await chromium.executablePath(),
   });
 
@@ -64,112 +58,92 @@ async function scrapearEventosUTP(username, password) {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
   );
 
-  // Ir a Class UTP
-  await page.goto("https://class.utp.edu.pe/", { waitUntil: "networkidle2" });
-  await page.waitForSelector("#username", { timeout: 2000 });
+  // 🔹 Bloquear recursos innecesarios
+  await page.setRequestInterception(true);
+  page.on("request", (req) => {
+    if (["image", "stylesheet", "font"].includes(req.resourceType())) {
+      req.abort();
+    } else {
+      req.continue();
+    }
+  });
 
-  // Login
+  // 🔹 Navegación optimizada
+  await page.goto("https://class.utp.edu.pe/", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#username", { timeout: 10000 });
+
+  // 🔹 Login
   await page.type("#username", username);
   await page.type("#password", password);
-  await page.click("#kc-login");
-  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 2000 });
+  await Promise.all([
+    page.click("#kc-login"),
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }),
+  ]);
 
-  // Esperar dashboard
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-
-  // 🔹 EXTRAER NOMBRE DEL ESTUDIANTE
+  // 🔹 Esperar dashboard y extraer nombre del estudiante
   const nombreEstudiante = await page.evaluate(() => {
     const nombre = document.querySelector(".text-body.font-bold");
     return nombre ? nombre.innerText.trim() : null;
   });
-
   console.log("✅ Nombre del estudiante:", nombreEstudiante);
 
-  // Ir a Calendario
+  // 🔹 Navegar a Calendario
   await page.evaluate(() => {
     const link = document.querySelector('a[title="Calendario"]');
     if (link) link.click();
-    else throw new Error("No se encontró el enlace del calendario.");
   });
+  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 10000 });
 
-  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 2000 });
+  // 🔹 Cambiar a vista semanal
   await page.evaluate(() => {
-    const weekButton = document.querySelector(
-      ".fc-timeGridWeek-button, .fc-week-button"
-    );
+    const weekButton = document.querySelector(".fc-timeGridWeek-button, .fc-week-button");
     if (weekButton) weekButton.click();
   });
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 10000 });
 
-  // Extraer eventos
+  // 🔹 Extraer eventos (en una sola llamada a page.evaluate)
   const eventos = await page.evaluate(() => {
     const lista = [];
-    document
-      .querySelectorAll(".fc-timegrid-event-harness")
-      .forEach((harnes) => {
-        const event = harnes.querySelector(".fc-timegrid-event");
-        if (!event) return;
+    document.querySelectorAll(".fc-timegrid-event-harness").forEach((harnes) => {
+      const event = harnes.querySelector(".fc-timegrid-event");
+      if (!event) return;
 
-        const isActivity =
-          event.querySelector(
-            '[data-testid="single-day-activity-card-container"]'
-          ) !== null;
-        const isClass =
-          event.querySelector(
-            '[data-testid="single-day-event-card-container"]'
-          ) !== null;
+      const isActivity = event.querySelector('[data-testid="single-day-activity-card-container"]') !== null;
+      const isClass = event.querySelector('[data-testid="single-day-event-card-container"]') !== null;
 
-        if (isActivity) {
-          lista.push({
-            tipo: "Actividad",
-            nombreActividad:
-              event
-                .querySelector('[data-testid="activity-name-text"]')
-                ?.innerText.trim() ||
-              event
-                .querySelector('[data-tip^="🔴"]')
-                ?.getAttribute("data-tip") ||
-              event.querySelector("p.font-black")?.innerText.trim(),
-            curso: event
-              .querySelector('[data-testid="course-name-text"]')
-              ?.innerText.trim(),
-            hora: event
-              .querySelector(".mt-xsm.text-neutral-03.text-small-02")
-              ?.innerText.trim(),
-            estado: event.querySelector(".truncate")?.innerText.trim(),
-          });
-        } else if (isClass) {
-          lista.push({
-            tipo: "Clase",
-            curso: event
-              .querySelector('[data-testid="course-name-text"]')
-              ?.innerText.trim(),
-            hora: event
-              .querySelector(".mt-sm.text-neutral-04.text-small-02")
-              ?.innerText.trim(),
-            modalidad: event
-              .querySelector("span.font-bold.text-body.rounded-lg")
-              ?.innerText.trim(),
-          });
-        } else {
-          lista.push({
-            tipo: "Otro",
-            nombre:
-              event.querySelector("p.font-black")?.innerText.trim() ||
-              event.querySelector("p")?.innerText.trim(),
-          });
-        }
-      });
+      if (isActivity) {
+        lista.push({
+          tipo: "Actividad",
+          nombreActividad:
+            event.querySelector('[data-testid="activity-name-text"]')?.innerText.trim() ||
+            event.querySelector('[data-tip^="🔴"]')?.getAttribute("data-tip") ||
+            event.querySelector("p.font-black")?.innerText.trim(),
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim(),
+          hora: event.querySelector(".mt-xsm.text-neutral-03.text-small-02")?.innerText.trim(),
+          estado: event.querySelector(".truncate")?.innerText.trim(),
+        });
+      } else if (isClass) {
+        lista.push({
+          tipo: "Clase",
+          curso: event.querySelector('[data-testid="course-name-text"]')?.innerText.trim(),
+          hora: event.querySelector(".mt-sm.text-neutral-04.text-small-02")?.innerText.trim(),
+          modalidad: event.querySelector("span.font-bold.text-body.rounded-lg")?.innerText.trim(),
+        });
+      } else {
+        lista.push({
+          tipo: "Otro",
+          nombre: event.querySelector("p.font-black")?.innerText.trim() || event.querySelector("p")?.innerText.trim(),
+        });
+      }
+    });
     return lista;
   });
 
   await browser.close();
-
-  // 🔹 Devolver JSON con nombre y eventos
   return { nombreEstudiante, eventos };
 }
 
-// Iniciar el servidor
+// 🔹 Iniciar el servidor
 app.listen(PORT, () => {
   console.log(`Servidor API escuchando en el puerto ${PORT}`);
 });
