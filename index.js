@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(
   cors({
-    origin: ["http://127.0.0.1:5500", "https://edule1182i2jejd.vercel.app"],
+    origin: ["http://127.0.0.1:5500", "https://utpschedule.vercel.app"],
   })
 ); // Permitir todas las fuentes
 app.use(express.json());
