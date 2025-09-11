@@ -39,6 +39,21 @@ async function getBrowser() {
   return browser;
 }
 
+// 🔹 Cierre seguro al terminar el proceso
+process.on("exit", async () => {
+  if (browser) await browser.close();
+});
+
+process.on("SIGINT", async () => {
+  if (browser) await browser.close();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  if (browser) await browser.close();
+  process.exit(0);
+});
+
 // Ruta POST para obtener eventos
 app.post("/api/eventos", async (req, res) => {
   const { username, password } = req.body;
@@ -78,7 +93,9 @@ async function scrapearEventosUTP(username, password) {
   chromium.setGraphicsMode = false;
 
   const browser = await getBrowser();
-  const page = await browser.newPage();
+  const context = await browser.createIncognitoBrowserContext();
+  const page = await context.newPage();
+
 
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -282,6 +299,7 @@ async function scrapearEventosUTP(username, password) {
   });
 
   await page.close();
+  await context.close(); // 🔹 muy importante
 
   return { nombreEstudiante, semanaInfo, eventos };
 }
@@ -530,7 +548,8 @@ app.get("/api/eventos-stream", async (req, res) => {
 
     send("eventos", { eventos });
 
-    await page.close();
+          await page.close();
+      await context.close();
 
     send("fin", { mensaje: "Scraping finalizado ✅" });
     res.end();
