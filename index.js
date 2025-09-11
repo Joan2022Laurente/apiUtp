@@ -47,6 +47,7 @@ async function getBrowserFromPool() {
     return browser;
   }
 
+ 
   // Esperar si el pool está lleno
   await new Promise((resolve) => setTimeout(resolve, 1000));
   return getBrowserFromPool();
@@ -128,7 +129,7 @@ app.post("/api/eventos", async (req, res) => {
 async function scrapearEventosUTP(username, password, browser) {
   chromium.setGraphicsMode = false;
 
-  const context = await browser.createIncognitoBrowserContext();
+  const context = await browser.createBrowserContext();
   const page = await context.newPage();
 
   try {
@@ -384,7 +385,7 @@ app.get("/api/eventos-stream", async (req, res) => {
 
   try {
     browser = await getBrowserFromPool();
-    context = await browser.createIncognitoBrowserContext();
+    context = await browser.createBrowserContext();
     page = await context.newPage();
 
     chromium.setGraphicsMode = false;
