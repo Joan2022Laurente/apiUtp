@@ -131,12 +131,12 @@ app.get("/api/eventos-stream", async (req, res) => {
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // Paso 5: Info de la semana
-    const semanaInfo = obtenerSemanaInfo(page);
+    const semanaInfo = await obtenerSemanaInfo(page);
     send("semana", { semanaInfo });
 
     // Paso 6: Eventos
     send("estado", { mensaje: "Extrayendo eventos..." });
-    const eventos = obtenerEventos(page);
+    const eventos = await obtenerEventos(page);
 
     send("eventos", { eventos });
 
