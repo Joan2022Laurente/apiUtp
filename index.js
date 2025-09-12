@@ -15,120 +15,241 @@ app.use(
 app.use(express.json());
 
 // ======================
-// Browser Pool
+// Configuración para Serverless
 // ======================
 
-class BrowserPool {
-  constructor(maxSize = 3) {
+const SERVERLESS_CONFIG = {
+  maxBrowsers: parseInt(process.env.MAX_BROWSERS) || 2,
+  browserTimeout: parseInt(process.env.BROWSER_TIMEOUT) || 25000,
+  maxRetries: parseInt(process.env.MAX_RETRIES) || 3,
+  retryDelay: parseInt(process.env.RETRY_DELAY) || 2000,
+  healthCheckInterval: parseInt(process.env.HEALTH_CHECK_INTERVAL) || 30000,
+  browserMaxAge: parseInt(process.env.BROWSER_MAX_AGE) || 5 * 60 * 1000, // 5 minutos
+};
+
+// ======================
+// Browser Pool Robusto
+// ======================
+
+class RobustBrowserPool {
+  constructor(maxSize = SERVERLESS_CONFIG.maxBrowsers) {
     this.pool = [];
     this.maxSize = maxSize;
     this.inUse = new Set();
-    this.waitingQueue = [];
+    this.creating = new Set(); // Track browsers being created
     this.healthCheckInterval = null;
+    this.stats = {
+      created: 0,
+      failed: 0,
+      closed: 0,
+      recycled: 0
+    };
     
-    // Iniciar health check
     this.startHealthCheck();
   }
 
   async init() {
-    console.log(`🔧 Inicializando pool de navegadores (máximo: ${this.maxSize})`);
-    // Pre-crear un navegador para faster first response
-    try {
-      const browser = await this.createBrowser();
-      this.pool.push(browser);
-      console.log(`✅ Navegador inicial creado. Pool size: ${this.pool.length}`);
-    } catch (error) {
-      console.error("❌ Error creando navegador inicial:", error);
-    }
+    console.log(`🔧 Inicializando pool robusto (máximo: ${this.maxSize})`);
+    console.log(`⚙️ Configuración serverless:`, SERVERLESS_CONFIG);
   }
 
   async createBrowser() {
+    const startTime = Date.now();
+    console.log(`🏗️ Intentando crear navegador... (Total creados: ${this.stats.created})`);
+
+    // Args minimalistas para serverless
     const args = [
-      ...chromium.args,
       '--no-sandbox',
+      '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-gpu',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--disable-web-security',
-      '--disable-features=TranslateUI',
-      '--disable-ipc-flooding-protection',
-      '--disable-hang-monitor',
-      '--disable-client-side-phishing-detection',
-      '--disable-popup-blocking',
-      '--disable-prompt-on-repost',
+      '--disable-features=VizDisplayCompositor,TranslateUI',
+      '--disable-extensions',
+      '--disable-plugins',
+      '--disable-images',
+      '--disable-javascript-harmony-shipping',
+      '--disable-background-networking',
+      '--disable-background-mode',
+      '--disable-default-apps',
       '--disable-sync',
-      '--metrics-recording-only',
+      '--disable-translate',
+      '--hide-scrollbars',
+      '--mute-audio',
       '--no-first-run',
-      '--safebrowsing-disable-auto-update',
-      '--enable-automation',
-      '--password-store=basic',
-      '--use-mock-keychain',
-      '--memory-pressure-off'
+      '--no-default-browser-check',
+      '--no-pings',
+      '--no-zygote',
+      '--single-process',
+      '--memory-pressure-off',
+      '--max_old_space_size=512',
+      '--aggressive-cache-discard',
+      '--disable-ipc-flooding-protection',
     ];
 
-    const browser = await puppeteer.launch({
-      args,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-      defaultViewport: chromium.defaultViewport,
-      timeout: 30000,
-      ignoreDefaultArgs: ['--disable-extensions'],
-    });
-
-    // Marcar timestamp de creación
-    browser._createdAt = Date.now();
-    return browser;
-  }
-
-  async getBrowser(timeout = 30000) {
-    const startTime = Date.now();
+    let browser = null;
     
-    while (Date.now() - startTime < timeout) {
-      // 1. Buscar navegador disponible en el pool
-      const availableBrowser = this.pool.find(browser => 
-        !this.inUse.has(browser) && browser.connected
-      );
+    try {
+      browser = await Promise.race([
+        puppeteer.launch({
+          args,
+          executablePath: await chromium.executablePath(),
+          headless: 'new', // Use new headless mode
+          defaultViewport: { width: 1024, height: 768 },
+          timeout: SERVERLESS_CONFIG.browserTimeout,
+          ignoreDefaultArgs: ['--disable-extensions'],
+          protocolTimeout: 10000,
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Browser launch timeout')), SERVERLESS_CONFIG.browserTimeout)
+        )
+      ]);
 
-      if (availableBrowser) {
-        this.inUse.add(availableBrowser);
-        console.log(`🔄 Navegador reutilizado. En uso: ${this.inUse.size}/${this.pool.length}`);
-        return availableBrowser;
+      // Verificar que el navegador esté realmente conectado
+      if (!browser || !browser.connected) {
+        throw new Error('Browser created but not connected');
       }
 
-      // 2. Si no hay disponibles, crear uno nuevo si no se alcanzó el límite
-      if (this.pool.length < this.maxSize) {
+      // Test inmediato para verificar funcionalidad
+      await this.testBrowser(browser);
+
+      browser._createdAt = Date.now();
+      browser._id = `browser-${this.stats.created}`;
+      this.stats.created++;
+
+      const duration = Date.now() - startTime;
+      console.log(`✅ Navegador creado exitosamente: ${browser._id} (${duration}ms)`);
+      
+      return browser;
+
+    } catch (error) {
+      this.stats.failed++;
+      console.error(`❌ Error creando navegador (fallos: ${this.stats.failed}):`, error.message);
+      
+      // Intentar cerrar navegador fallido
+      if (browser) {
         try {
-          const newBrowser = await this.createBrowser();
-          this.pool.push(newBrowser);
-          this.inUse.add(newBrowser);
-          console.log(`➕ Nuevo navegador creado. Pool size: ${this.pool.length}, En uso: ${this.inUse.size}`);
-          return newBrowser;
-        } catch (error) {
-          console.error("❌ Error creando navegador:", error);
+          await browser.close();
+        } catch (closeError) {
+          console.error('Error cerrando navegador fallido:', closeError.message);
+        }
+      }
+      
+      throw error;
+    }
+  }
+
+  async testBrowser(browser) {
+    const testTimeout = 5000;
+    const startTime = Date.now();
+    
+    try {
+      // Test básico: crear y cerrar contexto
+      const context = await Promise.race([
+        browser.createBrowserContext(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Context creation timeout')), testTimeout)
+        )
+      ]);
+
+      await context.close();
+      
+      const duration = Date.now() - startTime;
+      console.log(`🧪 Test de navegador exitoso (${duration}ms)`);
+      
+    } catch (error) {
+      throw new Error(`Browser test failed: ${error.message}`);
+    }
+  }
+
+  async getBrowser(retryCount = 0) {
+    const maxRetries = SERVERLESS_CONFIG.maxRetries;
+    
+    try {
+      // 1. Buscar navegador disponible y saludable
+      for (const browser of this.pool) {
+        if (!this.inUse.has(browser) && browser.connected && this.isBrowserHealthy(browser)) {
+          this.inUse.add(browser);
+          console.log(`🔄 Navegador reutilizado: ${browser._id} (En uso: ${this.inUse.size}/${this.pool.length})`);
+          return browser;
         }
       }
 
-      // 3. Si estamos en el límite, esperar a que se libere uno
-      console.log(`⏳ Pool lleno (${this.pool.length}/${this.maxSize}), esperando...`);
-      await this.waitForAvailable(1000);
-    }
+      // 2. Crear nuevo navegador si hay espacio
+      if (this.pool.length < this.maxSize) {
+        const browserId = `creating-${Date.now()}`;
+        this.creating.add(browserId);
+        
+        try {
+          const newBrowser = await this.createBrowser();
+          this.creating.delete(browserId);
+          
+          this.pool.push(newBrowser);
+          this.inUse.add(newBrowser);
+          
+          console.log(`➕ Nuevo navegador agregado: ${newBrowser._id} (Pool: ${this.pool.length})`);
+          return newBrowser;
+          
+        } catch (error) {
+          this.creating.delete(browserId);
+          throw error;
+        }
+      }
 
-    throw new Error('Timeout esperando navegador disponible');
+      // 3. Esperar a que se libere uno
+      console.log(`⏳ Pool lleno, esperando disponibilidad... (${this.inUse.size}/${this.pool.length})`);
+      await this.waitForAvailable(3000);
+      
+      // Retry recursivo
+      return await this.getBrowser(retryCount);
+
+    } catch (error) {
+      if (retryCount < maxRetries) {
+        console.log(`🔄 Retry ${retryCount + 1}/${maxRetries} en ${SERVERLESS_CONFIG.retryDelay}ms`);
+        await this.delay(SERVERLESS_CONFIG.retryDelay);
+        return await this.getBrowser(retryCount + 1);
+      }
+      
+      throw new Error(`Failed to get browser after ${maxRetries} retries: ${error.message}`);
+    }
   }
 
-  async waitForAvailable(checkInterval = 500) {
-    return new Promise(resolve => {
+  isBrowserHealthy(browser) {
+    if (!browser || !browser.connected) return false;
+    
+    const age = Date.now() - browser._createdAt;
+    if (age > SERVERLESS_CONFIG.browserMaxAge) {
+      console.log(`👴 Navegador ${browser._id} demasiado viejo (${Math.round(age / 1000)}s)`);
+      return false;
+    }
+    
+    return true;
+  }
+
+  async waitForAvailable(timeout = 10000) {
+    const startTime = Date.now();
+    
+    return new Promise((resolve, reject) => {
       const check = () => {
+        // Check for available browser
         const available = this.pool.find(browser => 
-          !this.inUse.has(browser) && browser.connected
+          !this.inUse.has(browser) && browser.connected && this.isBrowserHealthy(browser)
         );
         
         if (available || this.pool.length < this.maxSize) {
           resolve();
-        } else {
-          setTimeout(check, checkInterval);
+          return;
         }
+        
+        if (Date.now() - startTime > timeout) {
+          reject(new Error('Timeout waiting for browser availability'));
+          return;
+        }
+        
+        setTimeout(check, 250);
       };
       check();
     });
@@ -137,7 +258,7 @@ class BrowserPool {
   releaseBrowser(browser) {
     if (this.inUse.has(browser)) {
       this.inUse.delete(browser);
-      console.log(`🔓 Navegador liberado. En uso: ${this.inUse.size}/${this.pool.length}`);
+      console.log(`🔓 Navegador liberado: ${browser._id} (En uso: ${this.inUse.size}/${this.pool.length})`);
     }
   }
 
@@ -149,53 +270,51 @@ class BrowserPool {
         this.pool.splice(index, 1);
       }
       
-      if (browser.connected) {
+      if (browser && browser.connected) {
         await browser.close();
+        this.stats.closed++;
       }
-      console.log(`🗑️ Navegador removido del pool. Pool size: ${this.pool.length}`);
+      
+      console.log(`🗑️ Navegador removido: ${browser._id} (Pool: ${this.pool.length})`);
     } catch (error) {
-      console.error("Error removiendo navegador:", error);
+      console.error(`Error removiendo navegador ${browser._id}:`, error.message);
     }
   }
 
   startHealthCheck() {
     this.healthCheckInterval = setInterval(async () => {
-      console.log(`🏥 Health check - Pool: ${this.pool.length}, En uso: ${this.inUse.size}`);
+      console.log(`🏥 Health check - Pool: ${this.pool.length}, En uso: ${this.inUse.size}, Creando: ${this.creating.size}`);
+      console.log(`📊 Stats: Created(${this.stats.created}) Failed(${this.stats.failed}) Closed(${this.stats.closed})`);
       
-      const now = Date.now();
-      const maxAge = 10 * 60 * 1000; // 10 minutos
       const browsersToRemove = [];
 
       for (const browser of this.pool) {
-        // Remover navegadores desconectados
         if (!browser.connected) {
+          console.log(`💀 Navegador desconectado detectado: ${browser._id}`);
           browsersToRemove.push(browser);
-          continue;
-        }
-
-        // Remover navegadores muy viejos que no están en uso
-        if (!this.inUse.has(browser) && (now - browser._createdAt) > maxAge) {
+        } else if (!this.isBrowserHealthy(browser) && !this.inUse.has(browser)) {
+          console.log(`♻️ Reciclando navegador viejo: ${browser._id}`);
           browsersToRemove.push(browser);
-          continue;
+          this.stats.recycled++;
         }
       }
 
-      // Remover navegadores problemáticos
       for (const browser of browsersToRemove) {
         await this.removeBrowser(browser);
       }
-
-      // Mantener al menos un navegador disponible
-      if (this.pool.length === 0 && this.inUse.size === 0) {
+      
+      // Mantener al menos un navegador si no hay ninguno
+      if (this.pool.length === 0 && this.inUse.size === 0 && this.creating.size === 0) {
+        console.log('🔄 Pool vacío, intentando crear navegador de respaldo...');
         try {
           const browser = await this.createBrowser();
           this.pool.push(browser);
-          console.log("🔄 Navegador de respaldo creado");
+          console.log(`✅ Navegador de respaldo creado: ${browser._id}`);
         } catch (error) {
-          console.error("Error creando navegador de respaldo:", error);
+          console.error('❌ Error creando navegador de respaldo:', error.message);
         }
       }
-    }, 2 * 60 * 1000); // Cada 2 minutos
+    }, SERVERLESS_CONFIG.healthCheckInterval);
   }
 
   async closeAll() {
@@ -203,15 +322,28 @@ class BrowserPool {
       clearInterval(this.healthCheckInterval);
     }
 
-    console.log("🔥 Cerrando todos los navegadores...");
-    const closePromises = this.pool.map(browser => {
-      return browser.connected ? browser.close().catch(console.error) : Promise.resolve();
+    console.log(`🔥 Cerrando todos los navegadores (${this.pool.length})...`);
+    
+    const closePromises = this.pool.map(async (browser) => {
+      if (browser && browser.connected) {
+        try {
+          await browser.close();
+          this.stats.closed++;
+        } catch (error) {
+          console.error(`Error cerrando navegador ${browser._id}:`, error.message);
+        }
+      }
     });
     
     await Promise.all(closePromises);
     this.pool = [];
     this.inUse.clear();
-    console.log("✅ Todos los navegadores cerrados");
+    this.creating.clear();
+    console.log('✅ Todos los navegadores cerrados');
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   getStats() {
@@ -219,14 +351,17 @@ class BrowserPool {
       poolSize: this.pool.length,
       maxSize: this.maxSize,
       inUse: this.inUse.size,
+      creating: this.creating.size,
       available: this.pool.length - this.inUse.size,
-      connected: this.pool.filter(b => b.connected).length
+      connected: this.pool.filter(b => b && b.connected).length,
+      stats: { ...this.stats },
+      healthy: this.pool.filter(b => this.isBrowserHealthy(b)).length
     };
   }
 }
 
 // Crear instancia global del pool
-const browserPool = new BrowserPool(process.env.BROWSER_POOL_SIZE || 3);
+const browserPool = new RobustBrowserPool();
 
 // Inicializar el pool al arrancar
 browserPool.init();
@@ -236,10 +371,12 @@ process.on("exit", async () => {
   await browserPool.closeAll();
 });
 process.on("SIGINT", async () => {
+  console.log('\n🛑 Recibida señal SIGINT, cerrando...');
   await browserPool.closeAll();
   process.exit(0);
 });
 process.on("SIGTERM", async () => {
+  console.log('\n🛑 Recibida señal SIGTERM, cerrando...');
   await browserPool.closeAll();
   process.exit(0);
 });
@@ -249,58 +386,107 @@ process.on("SIGTERM", async () => {
 // ======================
 
 async function setupPage(browser) {
-  const context = await browser.createBrowserContext();
-  const page = await context.newPage();
+  let context = null;
+  let page = null;
   
-  // Configurar página para mejor rendimiento
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  );
-  
-  // Deshabilitar recursos pesados
-  await page.setRequestInterception(true);
-  page.on('request', (req) => {
-    const resourceType = req.resourceType();
-    if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
+  try {
+    console.log(`🔧 Configurando página para navegador: ${browser._id}`);
+    
+    context = await Promise.race([
+      browser.createBrowserContext(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Context creation timeout')), 10000)
+      )
+    ]);
 
-  return { context, page };
+    page = await Promise.race([
+      context.newPage(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Page creation timeout')), 10000)
+      )
+    ]);
+    
+    // Configurar página básica
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
+    
+    // Request interception minimalista
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    console.log(`✅ Página configurada exitosamente`);
+    return { context, page };
+    
+  } catch (error) {
+    console.error('❌ Error en setupPage:', error.message);
+    
+    // Cleanup en caso de error
+    if (page && !page.isClosed()) {
+      try { await page.close(); } catch {}
+    }
+    if (context) {
+      try { await context.close(); } catch {}
+    }
+    
+    throw error;
+  }
 }
 
 async function login(page, username, password) {
-  try {
-    await page.goto("https://class.utp.edu.pe/student/calendar", {
-      waitUntil: "networkidle2",
-      timeout: 30000
-    });
+  const maxRetries = 2;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔐 Intento de login ${attempt}/${maxRetries}`);
+      
+      await page.goto("https://class.utp.edu.pe/student/calendar", {
+        waitUntil: "networkidle2",
+        timeout: 20000
+      });
 
-    // Verificar si ya estamos logueados
-    const alreadyLoggedIn = await page.$('.text-body.font-bold');
-    if (alreadyLoggedIn) {
-      return; // Ya logueado
+      // Check if already logged in
+      const alreadyLoggedIn = await page.$('.text-body.font-bold');
+      if (alreadyLoggedIn) {
+        console.log('✅ Ya logueado');
+        return;
+      }
+
+      await page.waitForSelector("#username", { timeout: 10000 });
+      await page.type("#username", username);
+      await page.type("#password", password);
+      
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }),
+        page.click("#kc-login")
+      ]);
+
+      // Verify login success
+      const loginError = await page.$('.alert-error, .error-message, .invalid-credentials');
+      if (loginError) {
+        throw new Error('Credenciales inválidas');
+      }
+
+      console.log('✅ Login exitoso');
+      return;
+
+    } catch (error) {
+      console.error(`❌ Error en login attempt ${attempt}:`, error.message);
+      
+      if (attempt === maxRetries) {
+        throw new Error(`Login failed after ${maxRetries} attempts: ${error.message}`);
+      }
+      
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
-
-    await page.waitForSelector("#username", { timeout: 15000 });
-    await page.type("#username", username);
-    await page.type("#password", password);
-    
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }),
-      page.click("#kc-login")
-    ]);
-
-    // Verificar si el login fue exitoso
-    const loginError = await page.$('.alert-error, .error-message, .invalid-credentials');
-    if (loginError) {
-      throw new Error('Credenciales inválidas');
-    }
-
-  } catch (error) {
-    throw new Error(`Error en login: ${error.message}`);
   }
 }
 
@@ -308,9 +494,10 @@ async function getNombreEstudiante(page) {
   const maxRetries = 3;
   for (let i = 0; i < maxRetries; i++) {
     try {
-      await page.waitForSelector(".text-body.font-bold", { timeout: 10000 });
+      await page.waitForSelector(".text-body.font-bold", { timeout: 8000 });
       return await page.$eval(".text-body.font-bold", (el) => el.innerText.trim());
     } catch (error) {
+      console.log(`⚠️ Retry getNombreEstudiante ${i + 1}/${maxRetries}`);
       if (i === maxRetries - 1) throw error;
       await page.waitForTimeout(1000);
     }
@@ -327,32 +514,16 @@ async function getSemanaInfo(page) {
       return null;
     };
 
-    const cicloSelectors = [
-      '[data-testid="ciclo"]',
-      '.ciclo-info',
-      'p:contains("Ciclo")',
-      'span:contains("Ciclo")',
-      '.semester-info'
-    ];
-
-    const semanaSelectors = [
-      '[data-testid="semana"]',
-      '.week-info',
-      'p:contains("Semana")',
-      '.current-week'
-    ];
-
-    const fechasSelectors = [
-      '[data-testid="fechas"]',
-      '.date-range',
-      '.week-dates',
-      'p:contains("/")'
-    ];
-
     return {
-      ciclo: findTextBySelectors(cicloSelectors),
-      semanaActual: findTextBySelectors(semanaSelectors),
-      fechas: findTextBySelectors(fechasSelectors),
+      ciclo: findTextBySelectors([
+        '[data-testid="ciclo"]', '.ciclo-info', 'p:contains("Ciclo")', '.semester-info'
+      ]),
+      semanaActual: findTextBySelectors([
+        '[data-testid="semana"]', '.week-info', 'p:contains("Semana")', '.current-week'
+      ]),
+      fechas: findTextBySelectors([
+        '[data-testid="fechas"]', '.date-range', '.week-dates', 'p:contains("/")'
+      ]),
     };
   });
 }
@@ -360,14 +531,7 @@ async function getSemanaInfo(page) {
 async function getEventos(page) {
   return page.evaluate(() => {
     const eventos = [];
-    
-    const eventSelectors = [
-      '.event-card',
-      '.calendar-event',
-      '.schedule-item',
-      '[data-event]',
-      '.day-event'
-    ];
+    const eventSelectors = ['.event-card', '.calendar-event', '.schedule-item', '[data-event]', '.day-event'];
 
     let eventElements = [];
     for (const selector of eventSelectors) {
@@ -391,15 +555,7 @@ async function getEventos(page) {
           ?.querySelector('.day-label, .day-name, .date, h2, h3')?.innerText.trim() ||
         "";
 
-      const tipo = 
-        el.querySelector('.event-type, .type, .category')?.innerText.trim() ||
-        "";
-
-      const salon = 
-        el.querySelector('.room, .salon, .classroom')?.innerText.trim() ||
-        "";
-
-      eventos.push({ titulo, hora, dia, tipo, salon });
+      eventos.push({ titulo, hora, dia });
     });
 
     return eventos;
@@ -413,9 +569,10 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
   let browser = null;
   let context = null;
   let page = null;
+  const startTime = Date.now();
 
   try {
-    onStep("estado", { mensaje: "Obteniendo navegador del pool..." });
+    onStep("estado", { mensaje: "Obteniendo navegador..." });
     browser = await browserPool.getBrowser();
 
     onStep("estado", { mensaje: "Configurando página..." });
@@ -436,13 +593,18 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
     const eventos = await getEventos(page);
     onStep("eventos", { eventos });
 
+    const duration = Date.now() - startTime;
+    console.log(`✅ Scraping completado en ${duration}ms`);
+    
     return { nombreEstudiante, semanaInfo, eventos };
 
   } catch (error) {
-    console.error("Error en scraping:", error);
+    const duration = Date.now() - startTime;
+    console.error(`❌ Error en scraping (${duration}ms):`, error.message);
     
     // Si el navegador se desconectó, removerlo del pool
     if (browser && !browser.connected) {
+      console.log('🗑️ Removiendo navegador desconectado del pool');
       await browserPool.removeBrowser(browser);
       browser = null; // Para evitar liberarlo después
     }
@@ -454,7 +616,7 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
       if (page && !page.isClosed()) await page.close();
       if (context) await context.close();
     } catch (cleanupError) {
-      console.error("Error en cleanup:", cleanupError);
+      console.error('⚠️ Error en cleanup:', cleanupError.message);
     }
 
     // Liberar navegador de vuelta al pool
@@ -465,10 +627,10 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
 }
 
 // ======================
-// Rate Limiting
+// Rate Limiting & Validation
 // ======================
 const requestCounts = new Map();
-const RATE_LIMIT = 15; // Increased due to better efficiency
+const RATE_LIMIT = 10;
 const RATE_WINDOW = 60 * 60 * 1000;
 
 function rateLimit(req, res, next) {
@@ -530,7 +692,7 @@ app.post("/api/eventos", rateLimit, validateCredentials, async (req, res) => {
   } catch (error) {
     console.error("Error en /api/eventos:", error);
     
-    if (error.message.includes('Credenciales')) {
+    if (error.message.includes('Credenciales') || error.message.includes('Login')) {
       res.status(401).json({ error: error.message });
     } else if (error.message.includes('timeout') || error.message.includes('Timeout')) {
       res.status(408).json({ error: "Servicio temporalmente no disponible" });
@@ -568,19 +730,18 @@ app.get("/api/eventos-stream", rateLimit, validateCredentials, async (req, res) 
   }
 });
 
-// Endpoint de estadísticas del pool
 app.get("/api/pool-stats", (req, res) => {
   res.json(browserPool.getStats());
 });
 
-// Health check
 app.get("/health", (req, res) => {
   const stats = browserPool.getStats();
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    browserPool: stats
+    browserPool: stats,
+    config: SERVERLESS_CONFIG
   });
 });
 
@@ -600,5 +761,5 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en puerto ${PORT}`);
   console.log(`📊 Rate limit: ${RATE_LIMIT} requests/hora por IP`);
-  console.log(`🏊‍♂️ Browser pool configurado (máximo: ${browserPool.maxSize})`);
+  console.log(`🏊‍♂️ Browser pool robusto configurado (máximo: ${browserPool.maxSize})`);
 });
