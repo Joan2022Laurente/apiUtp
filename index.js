@@ -45,7 +45,7 @@ process.on("SIGTERM", async () => {
 
 // Configuración inicial de página en contexto privado
 async function setupPage(browser) {
-  const context = await browser.createIncognitoBrowserContext();
+  const context = await browser.createBrowserContext();
   const page = await context.newPage();
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
