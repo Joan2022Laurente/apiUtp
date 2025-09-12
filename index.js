@@ -6,7 +6,12 @@ import cors from "cors";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Middleware
+app.use(
+  cors({
+    origin: ["http://127.0.0.1:5500", "https://utpschedule.vercel.app"],
+  })
+);
 app.use(express.json());
 
 // ======================
