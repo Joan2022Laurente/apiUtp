@@ -80,7 +80,14 @@ async function getNombreEstudiante(page) {
 async function getSemanaInfo(page) {
   return page.evaluate(() => {
     const getTextByXPath = (xpath) =>
-      document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
+      document
+        .evaluate(
+          xpath,
+          document,
+          null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE,
+          null
+        )
         .singleNodeValue?.innerText.trim() || null;
     return {
       ciclo: getTextByXPath("/html/body/div/.../p"), // ⚠️ Ajusta los XPaths
@@ -96,9 +103,14 @@ async function getEventos(page) {
     const eventos = [];
     const items = document.querySelectorAll(".event-card");
     items.forEach((el) => {
-      const titulo = el.querySelector(".event-title")?.innerText.trim() || "Sin título";
+      const titulo =
+        el.querySelector(".event-title")?.innerText.trim() || "Sin título";
       const hora = el.querySelector(".event-time")?.innerText.trim() || "";
-      const dia = el.closest(".day-column")?.querySelector(".day-label")?.innerText.trim() || "";
+      const dia =
+        el
+          .closest(".day-column")
+          ?.querySelector(".day-label")
+          ?.innerText.trim() || "";
       eventos.push({ titulo, hora, dia });
     });
     return eventos;
@@ -152,8 +164,13 @@ app.post("/api/eventos", async (req, res) => {
 });
 
 // Ruta con SSE (stream de progreso)
-app.post("/api/eventos-stream", async (req, res) => {
-  const { username, password } = req.params;
+app.get("/api/eventos-stream", async (req, res) => {
+  const { username, password } = req.query;
+
+  if (!username || !password) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ error: "Faltan credenciales" }));
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
