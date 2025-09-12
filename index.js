@@ -14,10 +14,18 @@ app.use(
 ); // Permitir todas las fuentes
 app.use(express.json());
 
+let isBusy = false; // 🔹 Bandera global
+
 // Ruta POST para obtener eventos
 app.post("/api/eventos", async (req, res) => {
-  const { username, password } = req.body;
+  if (isBusy) {
+    return res.status(503).json({
+      success: false,
+      error: "El servicio está ocupado, intenta nuevamente en unos minutos.",
+    });
+  }
 
+  const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({
       success: false,
@@ -26,6 +34,7 @@ app.post("/api/eventos", async (req, res) => {
   }
 
   try {
+    isBusy = true; // 🔒 Bloquear el servicio
     const { nombreEstudiante, eventos } = await scrapearEventosUTP(
       username,
       password
@@ -38,9 +47,10 @@ app.post("/api/eventos", async (req, res) => {
       error:
         "Error al obtener eventos. Verifica tus credenciales o intenta más tarde.",
     });
+  } finally {
+    isBusy = false; // 🔓 Liberar el servicio siempre
   }
 });
-
 
 // Función para scrapear eventos (compatible con Render + JSON organizado)
 async function scrapearEventosUTP(username, password) {
@@ -130,84 +140,93 @@ async function scrapearEventosUTP(username, password) {
   const eventos = await page.evaluate(() => {
     const lista = [];
 
-    document.querySelectorAll(".fc-timegrid-event-harness").forEach((harnes) => {
-      const event = harnes.querySelector(".fc-timegrid-event");
-      if (!event) return;
+    document
+      .querySelectorAll(".fc-timegrid-event-harness")
+      .forEach((harnes) => {
+        const event = harnes.querySelector(".fc-timegrid-event");
+        if (!event) return;
 
-      const isActivity =
-        event.querySelector('[data-testid="single-day-activity-card-container"]') !== null;
-      const isClass =
-        event.querySelector('[data-testid="single-day-event-card-container"]') !== null;
+        const isActivity =
+          event.querySelector(
+            '[data-testid="single-day-activity-card-container"]'
+          ) !== null;
+        const isClass =
+          event.querySelector(
+            '[data-testid="single-day-event-card-container"]'
+          ) !== null;
 
-      // Día y fecha
-      const dayCell = harnes.closest(".fc-timegrid-col");
-      const dayDate = dayCell?.getAttribute("data-date");
+        // Día y fecha
+        const dayCell = harnes.closest(".fc-timegrid-col");
+        const dayDate = dayCell?.getAttribute("data-date");
 
-      let dayName = null;
-      if (dayDate) {
-        const headerCell = document.querySelector(
-          `th.fc-col-header-cell[data-date="${dayDate}"]`
-        );
-        if (headerCell) {
-          const dayText = headerCell
-            .querySelector(".fc-col-header-cell-cushion div")
-            ?.innerText.trim();
-          dayName = dayText ? dayText.replace(/\s+/g, " ").trim() : null;
+        let dayName = null;
+        if (dayDate) {
+          const headerCell = document.querySelector(
+            `th.fc-col-header-cell[data-date="${dayDate}"]`
+          );
+          if (headerCell) {
+            const dayText = headerCell
+              .querySelector(".fc-col-header-cell-cushion div")
+              ?.innerText.trim();
+            dayName = dayText ? dayText.replace(/\s+/g, " ").trim() : null;
+          }
         }
-      }
 
-      if (isActivity) {
-        const container = event.querySelector(
-          '[data-testid="single-day-activity-card-container"]'
-        );
-        const nombreActividad =
-          container.querySelector("#activity-name-text")?.innerText.trim() ||
-          container.querySelector("p[data-tip]")?.getAttribute("data-tip") ||
-          container.querySelector("p.font-black")?.innerText.trim();
+        if (isActivity) {
+          const container = event.querySelector(
+            '[data-testid="single-day-activity-card-container"]'
+          );
+          const nombreActividad =
+            container.querySelector("#activity-name-text")?.innerText.trim() ||
+            container.querySelector("p[data-tip]")?.getAttribute("data-tip") ||
+            container.querySelector("p.font-black")?.innerText.trim();
 
-        const curso = container.querySelector("#course-name-text")?.innerText.trim();
+          const curso = container
+            .querySelector("#course-name-text")
+            ?.innerText.trim();
 
-        const hora =
-          container.querySelector("p.mt-xsm.text-neutral-03.text-small-02")
-            ?.innerText.trim() || "Sin hora específica";
+          const hora =
+            container
+              .querySelector("p.mt-xsm.text-neutral-03.text-small-02")
+              ?.innerText.trim() || "Sin hora específica";
 
-        const estado = container.querySelector(
-          '[data-testid="activity-state-tag-container"] span'
-        )?.innerText.trim();
+          const estado = container
+            .querySelector('[data-testid="activity-state-tag-container"] span')
+            ?.innerText.trim();
 
-        lista.push({
-          tipo: "Actividad",
-          nombreActividad,
-          curso,
-          hora,
-          estado,
-          dia: dayName,
-          fecha: dayDate,
-        });
-      } else if (isClass) {
-        const container = event.querySelector(
-          '[data-testid="single-day-event-card-container"]'
-        );
-        const curso =
-          container.querySelector("#course-name-text")?.innerText.trim() ||
-          container.querySelector("p.font-black")?.innerText.trim();
-        const hora = container.querySelector(
-          "p.mt-sm.text-neutral-04.text-small-02"
-        )?.innerText.trim();
-        const modalidad = container.querySelector(
-          "span.font-bold.text-body.rounded-lg"
-        )?.innerText.trim();
+          lista.push({
+            tipo: "Actividad",
+            nombreActividad,
+            curso,
+            hora,
+            estado,
+            dia: dayName,
+            fecha: dayDate,
+          });
+        } else if (isClass) {
+          const container = event.querySelector(
+            '[data-testid="single-day-event-card-container"]'
+          );
+          const curso =
+            container.querySelector("#course-name-text")?.innerText.trim() ||
+            container.querySelector("p.font-black")?.innerText.trim();
+          const hora = container
+            .querySelector("p.mt-sm.text-neutral-04.text-small-02")
+            ?.innerText.trim();
+          const modalidad = container
+            .querySelector("span.font-bold.text-body.rounded-lg")
+            ?.innerText.trim();
 
-        lista.push({
-          tipo: "Clase",
-          curso,
-          hora,
-          modalidad,
-          dia: dayName,
-          fecha: dayDate,
-        });
-      }
-    });
+          lista.push({
+            tipo: "Clase",
+            curso,
+            hora,
+            modalidad,
+            dia: dayName,
+            fecha: dayDate,
+          });
+        }
+      });
 
     // Eventos de varios días
     document.querySelectorAll(".fc-daygrid-event-harness").forEach((h) => {
@@ -220,7 +239,9 @@ async function scrapearEventosUTP(username, password) {
         lista.push({
           tipo: "Curso",
           curso: multi.querySelector("span.font-black")?.innerText.trim(),
-          modalidad: multi.querySelector("span.font-bold.text-body.rounded-lg")?.innerText.trim(),
+          modalidad: multi
+            .querySelector("span.font-bold.text-body.rounded-lg")
+            ?.innerText.trim(),
           dia: "Todo el ciclo",
           fecha: null,
         });
@@ -234,11 +255,22 @@ async function scrapearEventosUTP(username, password) {
   return { nombreEstudiante, semanaInfo, eventos };
 }
 
-
 // ===================================================
 // 🔹 NUEVA RUTA SSE (eventos-stream) CORREGIDA
 // ===================================================
 app.get("/api/eventos-stream", async (req, res) => {
+  if (isBusy) {
+    res.writeHead(503, { "Content-Type": "application/json" });
+    return res.end(
+      JSON.stringify({
+        success: false,
+        error: "El servicio está ocupado, intenta nuevamente en unos minutos.",
+      })
+    );
+  }
+
+  isBusy = true; // 🔒 Bloquear el servicio
+
   const { username, password } = req.query;
 
   if (!username || !password) {
@@ -286,7 +318,9 @@ app.get("/api/eventos-stream", async (req, res) => {
 
     // Paso 1: Navegar
     send("estado", { mensaje: "Navegando a Class UTP..." });
-    await page.goto("https://class.utp.edu.pe/student/calendar", { waitUntil: "networkidle2" });
+    await page.goto("https://class.utp.edu.pe/student/calendar", {
+      waitUntil: "networkidle2",
+    });
     await page.waitForSelector("#username", { timeout: 30000 });
 
     // Paso 2: Login
@@ -306,9 +340,13 @@ app.get("/api/eventos-stream", async (req, res) => {
 
     // Paso 4: Vista semanal
     send("estado", { mensaje: "Cambiando a vista semanal..." });
-    await page.waitForSelector(".fc-timegrid-event-harness", { timeout: 60000 });
+    await page.waitForSelector(".fc-timegrid-event-harness", {
+      timeout: 60000,
+    });
     await page.evaluate(() => {
-      const weekButton = document.querySelector(".fc-timeGridWeek-button, .fc-week-button");
+      const weekButton = document.querySelector(
+        ".fc-timeGridWeek-button, .fc-week-button"
+      );
       if (weekButton) weekButton.click();
     });
     await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -346,103 +384,122 @@ app.get("/api/eventos-stream", async (req, res) => {
     const eventos = await page.evaluate(() => {
       const lista = [];
 
-      document.querySelectorAll(".fc-timegrid-event-harness").forEach((harnes) => {
-        const event = harnes.querySelector(".fc-timegrid-event");
-        if (!event) return;
+      document
+        .querySelectorAll(".fc-timegrid-event-harness")
+        .forEach((harnes) => {
+          const event = harnes.querySelector(".fc-timegrid-event");
+          if (!event) return;
 
-        const isActivity =
-          event.querySelector('[data-testid="single-day-activity-card-container"]') !== null;
-        const isClass =
-          event.querySelector('[data-testid="single-day-event-card-container"]') !== null;
+          const isActivity =
+            event.querySelector(
+              '[data-testid="single-day-activity-card-container"]'
+            ) !== null;
+          const isClass =
+            event.querySelector(
+              '[data-testid="single-day-event-card-container"]'
+            ) !== null;
 
-        // Día y fecha
-        const dayCell = harnes.closest(".fc-timegrid-col");
-        const dayDate = dayCell?.getAttribute("data-date");
+          // Día y fecha
+          const dayCell = harnes.closest(".fc-timegrid-col");
+          const dayDate = dayCell?.getAttribute("data-date");
 
-        let dayName = null;
-        if (dayDate) {
-          const headerCell = document.querySelector(
-            `th.fc-col-header-cell[data-date="${dayDate}"]`
-          );
-          if (headerCell) {
-            const dayText = headerCell
-              .querySelector(".fc-col-header-cell-cushion div")
-              ?.innerText.trim();
-            dayName = dayText ? dayText.replace(/\s+/g, " ").trim() : null;
-          }
-        }
-
-        if (isActivity) {
-          const container = event.querySelector(
-            '[data-testid="single-day-activity-card-container"]'
-          );
-          const nombreActividad =
-            container.querySelector("#activity-name-text")?.innerText.trim() ||
-            container.querySelector("p[data-tip]")?.getAttribute("data-tip") ||
-            container.querySelector("p.font-black")?.innerText.trim();
-
-          const curso = container.querySelector("#course-name-text")?.innerText.trim();
-
-          const horaElements = container.querySelectorAll(
-            "p.mt-xsm.text-neutral-03.text-small-02"
-          );
-          let hora = null;
-          if (horaElements.length > 1) {
-            hora = horaElements[1]?.innerText.trim();
-          } else if (horaElements.length === 1) {
-            const text = horaElements[0]?.innerText.trim();
-            if (text && (text.includes("a.m.") || text.includes("p.m.") || text.includes(":"))) {
-              hora = text;
+          let dayName = null;
+          if (dayDate) {
+            const headerCell = document.querySelector(
+              `th.fc-col-header-cell[data-date="${dayDate}"]`
+            );
+            if (headerCell) {
+              const dayText = headerCell
+                .querySelector(".fc-col-header-cell-cushion div")
+                ?.innerText.trim();
+              dayName = dayText ? dayText.replace(/\s+/g, " ").trim() : null;
             }
           }
-          if (!hora) {
-            const elements = container.querySelectorAll("[data-tip]");
-            for (let el of elements) {
-              const tip = el.getAttribute("data-tip");
-              if (tip && (tip.includes("a.m.") || tip.includes("p.m."))) {
-                hora = tip;
-                break;
+
+          if (isActivity) {
+            const container = event.querySelector(
+              '[data-testid="single-day-activity-card-container"]'
+            );
+            const nombreActividad =
+              container
+                .querySelector("#activity-name-text")
+                ?.innerText.trim() ||
+              container
+                .querySelector("p[data-tip]")
+                ?.getAttribute("data-tip") ||
+              container.querySelector("p.font-black")?.innerText.trim();
+
+            const curso = container
+              .querySelector("#course-name-text")
+              ?.innerText.trim();
+
+            const horaElements = container.querySelectorAll(
+              "p.mt-xsm.text-neutral-03.text-small-02"
+            );
+            let hora = null;
+            if (horaElements.length > 1) {
+              hora = horaElements[1]?.innerText.trim();
+            } else if (horaElements.length === 1) {
+              const text = horaElements[0]?.innerText.trim();
+              if (
+                text &&
+                (text.includes("a.m.") ||
+                  text.includes("p.m.") ||
+                  text.includes(":"))
+              ) {
+                hora = text;
               }
             }
+            if (!hora) {
+              const elements = container.querySelectorAll("[data-tip]");
+              for (let el of elements) {
+                const tip = el.getAttribute("data-tip");
+                if (tip && (tip.includes("a.m.") || tip.includes("p.m."))) {
+                  hora = tip;
+                  break;
+                }
+              }
+            }
+
+            const estado = container
+              .querySelector(
+                '[data-testid="activity-state-tag-container"] span'
+              )
+              ?.innerText.trim();
+
+            lista.push({
+              tipo: "Actividad",
+              nombreActividad,
+              curso,
+              hora: hora || "Sin hora específica",
+              estado,
+              dia: dayName,
+              fecha: dayDate,
+            });
+          } else if (isClass) {
+            const container = event.querySelector(
+              '[data-testid="single-day-event-card-container"]'
+            );
+            const curso =
+              container.querySelector("#course-name-text")?.innerText.trim() ||
+              container.querySelector("p.font-black")?.innerText.trim();
+            const hora = container
+              .querySelector("p.mt-sm.text-neutral-04.text-small-02")
+              ?.innerText.trim();
+            const modalidad = container
+              .querySelector("span.font-bold.text-body.rounded-lg")
+              ?.innerText.trim();
+
+            lista.push({
+              tipo: "Clase",
+              curso,
+              hora,
+              modalidad,
+              dia: dayName,
+              fecha: dayDate,
+            });
           }
-
-          const estado = container.querySelector(
-            '[data-testid="activity-state-tag-container"] span'
-          )?.innerText.trim();
-
-          lista.push({
-            tipo: "Actividad",
-            nombreActividad,
-            curso,
-            hora: hora || "Sin hora específica",
-            estado,
-            dia: dayName,
-            fecha: dayDate,
-          });
-        } else if (isClass) {
-          const container = event.querySelector(
-            '[data-testid="single-day-event-card-container"]'
-          );
-          const curso =
-            container.querySelector("#course-name-text")?.innerText.trim() ||
-            container.querySelector("p.font-black")?.innerText.trim();
-          const hora = container.querySelector(
-            "p.mt-sm.text-neutral-04.text-small-02"
-          )?.innerText.trim();
-          const modalidad = container.querySelector(
-            "span.font-bold.text-body.rounded-lg"
-          )?.innerText.trim();
-
-          lista.push({
-            tipo: "Clase",
-            curso,
-            hora,
-            modalidad,
-            dia: dayName,
-            fecha: dayDate,
-          });
-        }
-      });
+        });
 
       // Eventos de varios días
       document.querySelectorAll(".fc-daygrid-event-harness").forEach((h) => {
@@ -455,7 +512,9 @@ app.get("/api/eventos-stream", async (req, res) => {
           lista.push({
             tipo: "Curso",
             curso: multi.querySelector("span.font-black")?.innerText.trim(),
-            modalidad: multi.querySelector("span.font-bold.text-body.rounded-lg")?.innerText.trim(),
+            modalidad: multi
+              .querySelector("span.font-bold.text-body.rounded-lg")
+              ?.innerText.trim(),
             dia: "Todo el ciclo",
             fecha: null,
           });
@@ -474,6 +533,8 @@ app.get("/api/eventos-stream", async (req, res) => {
     console.error("Error en SSE:", error);
     send("error", { mensaje: error.message });
     res.end();
+  } finally {
+    isBusy = false; // 🔓 Liberar siempre al final
   }
 });
 
