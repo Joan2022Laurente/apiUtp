@@ -15,48 +15,239 @@ app.use(
 app.use(express.json());
 
 // ======================
-// Browser Management
+// Browser Pool
 // ======================
 
-// Crear navegador con configuración robusta para producción
-async function createBrowser() {
-  const args = [
-    ...chromium.args,
-    '--no-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-web-security',
-    '--disable-features=TranslateUI',
-    '--disable-ipc-flooding-protection',
-    '--disable-hang-monitor',
-    '--disable-client-side-phishing-detection',
-    '--disable-popup-blocking',
-    '--disable-prompt-on-repost',
-    '--disable-sync',
-    '--metrics-recording-only',
-    '--no-first-run',
-    '--safebrowsing-disable-auto-update',
-    '--enable-automation',
-    '--password-store=basic',
-    '--use-mock-keychain'
-  ];
+class BrowserPool {
+  constructor(maxSize = 3) {
+    this.pool = [];
+    this.maxSize = maxSize;
+    this.inUse = new Set();
+    this.waitingQueue = [];
+    this.healthCheckInterval = null;
+    
+    // Iniciar health check
+    this.startHealthCheck();
+  }
 
-  return await puppeteer.launch({
-    args,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-    defaultViewport: chromium.defaultViewport,
-    timeout: 30000,
-  });
+  async init() {
+    console.log(`🔧 Inicializando pool de navegadores (máximo: ${this.maxSize})`);
+    // Pre-crear un navegador para faster first response
+    try {
+      const browser = await this.createBrowser();
+      this.pool.push(browser);
+      console.log(`✅ Navegador inicial creado. Pool size: ${this.pool.length}`);
+    } catch (error) {
+      console.error("❌ Error creando navegador inicial:", error);
+    }
+  }
+
+  async createBrowser() {
+    const args = [
+      ...chromium.args,
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-web-security',
+      '--disable-features=TranslateUI',
+      '--disable-ipc-flooding-protection',
+      '--disable-hang-monitor',
+      '--disable-client-side-phishing-detection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--enable-automation',
+      '--password-store=basic',
+      '--use-mock-keychain',
+      '--memory-pressure-off'
+    ];
+
+    const browser = await puppeteer.launch({
+      args,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+      defaultViewport: chromium.defaultViewport,
+      timeout: 30000,
+      ignoreDefaultArgs: ['--disable-extensions'],
+    });
+
+    // Marcar timestamp de creación
+    browser._createdAt = Date.now();
+    return browser;
+  }
+
+  async getBrowser(timeout = 30000) {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      // 1. Buscar navegador disponible en el pool
+      const availableBrowser = this.pool.find(browser => 
+        !this.inUse.has(browser) && browser.connected
+      );
+
+      if (availableBrowser) {
+        this.inUse.add(availableBrowser);
+        console.log(`🔄 Navegador reutilizado. En uso: ${this.inUse.size}/${this.pool.length}`);
+        return availableBrowser;
+      }
+
+      // 2. Si no hay disponibles, crear uno nuevo si no se alcanzó el límite
+      if (this.pool.length < this.maxSize) {
+        try {
+          const newBrowser = await this.createBrowser();
+          this.pool.push(newBrowser);
+          this.inUse.add(newBrowser);
+          console.log(`➕ Nuevo navegador creado. Pool size: ${this.pool.length}, En uso: ${this.inUse.size}`);
+          return newBrowser;
+        } catch (error) {
+          console.error("❌ Error creando navegador:", error);
+        }
+      }
+
+      // 3. Si estamos en el límite, esperar a que se libere uno
+      console.log(`⏳ Pool lleno (${this.pool.length}/${this.maxSize}), esperando...`);
+      await this.waitForAvailable(1000);
+    }
+
+    throw new Error('Timeout esperando navegador disponible');
+  }
+
+  async waitForAvailable(checkInterval = 500) {
+    return new Promise(resolve => {
+      const check = () => {
+        const available = this.pool.find(browser => 
+          !this.inUse.has(browser) && browser.connected
+        );
+        
+        if (available || this.pool.length < this.maxSize) {
+          resolve();
+        } else {
+          setTimeout(check, checkInterval);
+        }
+      };
+      check();
+    });
+  }
+
+  releaseBrowser(browser) {
+    if (this.inUse.has(browser)) {
+      this.inUse.delete(browser);
+      console.log(`🔓 Navegador liberado. En uso: ${this.inUse.size}/${this.pool.length}`);
+    }
+  }
+
+  async removeBrowser(browser) {
+    try {
+      this.inUse.delete(browser);
+      const index = this.pool.indexOf(browser);
+      if (index > -1) {
+        this.pool.splice(index, 1);
+      }
+      
+      if (browser.connected) {
+        await browser.close();
+      }
+      console.log(`🗑️ Navegador removido del pool. Pool size: ${this.pool.length}`);
+    } catch (error) {
+      console.error("Error removiendo navegador:", error);
+    }
+  }
+
+  startHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      console.log(`🏥 Health check - Pool: ${this.pool.length}, En uso: ${this.inUse.size}`);
+      
+      const now = Date.now();
+      const maxAge = 10 * 60 * 1000; // 10 minutos
+      const browsersToRemove = [];
+
+      for (const browser of this.pool) {
+        // Remover navegadores desconectados
+        if (!browser.connected) {
+          browsersToRemove.push(browser);
+          continue;
+        }
+
+        // Remover navegadores muy viejos que no están en uso
+        if (!this.inUse.has(browser) && (now - browser._createdAt) > maxAge) {
+          browsersToRemove.push(browser);
+          continue;
+        }
+      }
+
+      // Remover navegadores problemáticos
+      for (const browser of browsersToRemove) {
+        await this.removeBrowser(browser);
+      }
+
+      // Mantener al menos un navegador disponible
+      if (this.pool.length === 0 && this.inUse.size === 0) {
+        try {
+          const browser = await this.createBrowser();
+          this.pool.push(browser);
+          console.log("🔄 Navegador de respaldo creado");
+        } catch (error) {
+          console.error("Error creando navegador de respaldo:", error);
+        }
+      }
+    }, 2 * 60 * 1000); // Cada 2 minutos
+  }
+
+  async closeAll() {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+
+    console.log("🔥 Cerrando todos los navegadores...");
+    const closePromises = this.pool.map(browser => {
+      return browser.connected ? browser.close().catch(console.error) : Promise.resolve();
+    });
+    
+    await Promise.all(closePromises);
+    this.pool = [];
+    this.inUse.clear();
+    console.log("✅ Todos los navegadores cerrados");
+  }
+
+  getStats() {
+    return {
+      poolSize: this.pool.length,
+      maxSize: this.maxSize,
+      inUse: this.inUse.size,
+      available: this.pool.length - this.inUse.size,
+      connected: this.pool.filter(b => b.connected).length
+    };
+  }
 }
+
+// Crear instancia global del pool
+const browserPool = new BrowserPool(process.env.BROWSER_POOL_SIZE || 3);
+
+// Inicializar el pool al arrancar
+browserPool.init();
+
+// Cleanup al cerrar la aplicación
+process.on("exit", async () => {
+  await browserPool.closeAll();
+});
+process.on("SIGINT", async () => {
+  await browserPool.closeAll();
+  process.exit(0);
+});
+process.on("SIGTERM", async () => {
+  await browserPool.closeAll();
+  process.exit(0);
+});
 
 // ======================
 // Helpers
 // ======================
 
-// Configuración inicial de página en contexto privado
 async function setupPage(browser) {
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
@@ -80,7 +271,6 @@ async function setupPage(browser) {
   return { context, page };
 }
 
-// Login con mejor manejo de errores
 async function login(page, username, password) {
   try {
     await page.goto("https://class.utp.edu.pe/student/calendar", {
@@ -114,7 +304,6 @@ async function login(page, username, password) {
   }
 }
 
-// Obtener nombre de estudiante con retry
 async function getNombreEstudiante(page) {
   const maxRetries = 3;
   for (let i = 0; i < maxRetries; i++) {
@@ -128,10 +317,8 @@ async function getNombreEstudiante(page) {
   }
 }
 
-// Info de la semana - versión más robusta
 async function getSemanaInfo(page) {
   return page.evaluate(() => {
-    // Función helper para buscar texto por múltiples selectores
     const findTextBySelectors = (selectors) => {
       for (const selector of selectors) {
         const element = document.querySelector(selector);
@@ -140,7 +327,6 @@ async function getSemanaInfo(page) {
       return null;
     };
 
-    // Buscar ciclo con múltiples estrategias
     const cicloSelectors = [
       '[data-testid="ciclo"]',
       '.ciclo-info',
@@ -171,12 +357,10 @@ async function getSemanaInfo(page) {
   });
 }
 
-// Eventos - versión más robusta
 async function getEventos(page) {
   return page.evaluate(() => {
     const eventos = [];
     
-    // Múltiples selectores para encontrar eventos
     const eventSelectors = [
       '.event-card',
       '.calendar-event',
@@ -192,7 +376,6 @@ async function getEventos(page) {
     }
 
     eventElements.forEach((el) => {
-      // Múltiples estrategias para extraer datos
       const titulo = 
         el.querySelector('.event-title, .title, .event-name, h3, h4, .subject')?.innerText.trim() ||
         el.textContent.split('\n')[0]?.trim() ||
@@ -232,8 +415,8 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
   let page = null;
 
   try {
-    onStep("estado", { mensaje: "Creando navegador..." });
-    browser = await createBrowser();
+    onStep("estado", { mensaje: "Obteniendo navegador del pool..." });
+    browser = await browserPool.getBrowser();
 
     onStep("estado", { mensaje: "Configurando página..." });
     ({ context, page } = await setupPage(browser));
@@ -257,25 +440,36 @@ async function scrapearEventosUTP(username, password, onStep = () => {}) {
 
   } catch (error) {
     console.error("Error en scraping:", error);
+    
+    // Si el navegador se desconectó, removerlo del pool
+    if (browser && !browser.connected) {
+      await browserPool.removeBrowser(browser);
+      browser = null; // Para evitar liberarlo después
+    }
+    
     throw error;
   } finally {
-    // Cleanup garantizado
+    // Cleanup de página y contexto
     try {
       if (page && !page.isClosed()) await page.close();
       if (context) await context.close();
-      if (browser && browser.connected) await browser.close();
     } catch (cleanupError) {
       console.error("Error en cleanup:", cleanupError);
+    }
+
+    // Liberar navegador de vuelta al pool
+    if (browser) {
+      browserPool.releaseBrowser(browser);
     }
   }
 }
 
 // ======================
-// Middleware de rate limiting
+// Rate Limiting
 // ======================
 const requestCounts = new Map();
-const RATE_LIMIT = 10; // requests por IP por hora
-const RATE_WINDOW = 60 * 60 * 1000; // 1 hora
+const RATE_LIMIT = 15; // Increased due to better efficiency
+const RATE_WINDOW = 60 * 60 * 1000;
 
 function rateLimit(req, res, next) {
   const ip = req.ip || req.connection.remoteAddress;
@@ -296,7 +490,8 @@ function rateLimit(req, res, next) {
   
   if (userRequests.count >= RATE_LIMIT) {
     return res.status(429).json({ 
-      error: "Demasiadas solicitudes. Intenta más tarde." 
+      error: "Demasiadas solicitudes. Intenta más tarde.",
+      resetTime: userRequests.resetTime
     });
   }
   
@@ -304,11 +499,6 @@ function rateLimit(req, res, next) {
   next();
 }
 
-// ======================
-// Rutas
-// ======================
-
-// Middleware de validación
 function validateCredentials(req, res, next) {
   const { username, password } = req.method === 'GET' ? req.query : req.body;
   
@@ -327,7 +517,10 @@ function validateCredentials(req, res, next) {
   next();
 }
 
-// Ruta normal (retorna JSON)
+// ======================
+// Rutas
+// ======================
+
 app.post("/api/eventos", rateLimit, validateCredentials, async (req, res) => {
   const { username, password } = req.body;
   
@@ -339,15 +532,14 @@ app.post("/api/eventos", rateLimit, validateCredentials, async (req, res) => {
     
     if (error.message.includes('Credenciales')) {
       res.status(401).json({ error: error.message });
-    } else if (error.message.includes('timeout')) {
-      res.status(408).json({ error: "Timeout - Intenta nuevamente" });
+    } else if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+      res.status(408).json({ error: "Servicio temporalmente no disponible" });
     } else {
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }
 });
 
-// Ruta con SSE (stream de progreso)
 app.get("/api/eventos-stream", rateLimit, validateCredentials, async (req, res) => {
   const { username, password } = req.query;
 
@@ -376,16 +568,23 @@ app.get("/api/eventos-stream", rateLimit, validateCredentials, async (req, res) 
   }
 });
 
+// Endpoint de estadísticas del pool
+app.get("/api/pool-stats", (req, res) => {
+  res.json(browserPool.getStats());
+});
+
 // Health check
 app.get("/health", (req, res) => {
+  const stats = browserPool.getStats();
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    browserPool: stats
   });
 });
 
-// Cleanup periódico de rate limiting
+// Cleanup periódico
 setInterval(() => {
   const now = Date.now();
   for (const [ip, data] of requestCounts) {
@@ -393,7 +592,7 @@ setInterval(() => {
       requestCounts.delete(ip);
     }
   }
-}, 5 * 60 * 1000); // Cada 5 minutos
+}, 5 * 60 * 1000);
 
 // ======================
 // Servidor
@@ -401,4 +600,5 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en puerto ${PORT}`);
   console.log(`📊 Rate limit: ${RATE_LIMIT} requests/hora por IP`);
+  console.log(`🏊‍♂️ Browser pool configurado (máximo: ${browserPool.maxSize})`);
 });
