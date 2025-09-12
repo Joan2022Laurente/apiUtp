@@ -2,7 +2,7 @@ import express from "express";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
-import { obtenerEventos, obtenerNombreEstudiante, obtenerSemanaInfo } from "./subScrapper/subScrapper";
+import { obtenerEventos, obtenerNombreEstudiante, obtenerSemanaInfo } from "./subScrapper/subScrapper.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
