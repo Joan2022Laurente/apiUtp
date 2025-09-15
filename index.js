@@ -2,7 +2,11 @@ import express from "express";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
-import { obtenerEventos, obtenerNombreEstudiante, obtenerSemanaInfo } from "./subScrapper/subScrapper.js";
+import {
+  obtenerEventos,
+  obtenerNombreEstudiante,
+  obtenerSemanaInfo,
+} from "./subScrapper/subScrapper.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -159,6 +163,10 @@ app.get("/api/eventos-stream", async (req, res) => {
   } finally {
     isBusy = false;
   }
+});
+
+app.get("/status", (req, res) => {
+  res.json({ busy: isBusy });
 });
 
 // Iniciar servidor
