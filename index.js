@@ -28,7 +28,7 @@ async function getBrowser() {
     browser = await puppeteer.launch({
       headless: true,
       args: [
-        ...chromium.args,
+        chromium.args,
         "--window-size=1920,1080",
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -46,7 +46,7 @@ async function getBrowser() {
 // ===================================================
 // Ruta SSE con navegador persistente, cookies borradas, cache mantenida
 // ===================================================
-app.get("/api/eventos-stream", async (req, res) => {
+app.post("/api/eventos-stream", async (req, res) => {
   if (isBusy) {
     res.writeHead(503, { "Content-Type": "application/json" });
     return res.end(
@@ -59,7 +59,7 @@ app.get("/api/eventos-stream", async (req, res) => {
 
   isBusy = true; // Bloquear servicio
 
-  const { username, password } = req.query;
+const { username, password } = req.body;
   if (!username || !password) {
     res.writeHead(400, { "Content-Type": "application/json" });
     return res.end(
@@ -84,7 +84,7 @@ app.get("/api/eventos-stream", async (req, res) => {
 
   // Cancelar scraping si el cliente se desconecta
   req.on("close", async () => {
-    console.log("Cliente desconectado, cancelando scraping...");
+    console.log("Cliente desconectado, cancelando scraping");
     if (page) {
       try {
         await page.close();
@@ -103,7 +103,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     );
 
     // Paso 1: Navegar
-    send("estado", { mensaje: "Conectando servidor" });
+    send("estado", { mensaje: "Conectando" });
     await page.goto("https://class.utp.edu.pe/student/calendar", {
       waitUntil: "networkidle2",
     });
@@ -139,7 +139,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     send("semana", { semanaInfo });
 
     // Paso 6: Eventos
-    send("estado", { mensaje: "Buscando eventos" });
+    send("estado", { mensaje: "Extrayendo eventos" });
     const eventos = await obtenerEventos(page);
 
     send("eventos", { eventos });
