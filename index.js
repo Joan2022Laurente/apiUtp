@@ -103,14 +103,14 @@ app.get("/api/eventos-stream", async (req, res) => {
     );
 
     // Paso 1: Navegar
-    send("estado", { mensaje: "Navegando a Class UTP..." });
+    send("estado", { mensaje: "Espere un momento" });
     await page.goto("https://class.utp.edu.pe/student/calendar", {
       waitUntil: "networkidle2",
     });
     await page.waitForSelector("#username", { timeout: 30000 });
 
     // Paso 2: Login
-    send("estado", { mensaje: "Iniciando sesión..." });
+    send("estado", { mensaje: "Autenticando" });
     await page.type("#username", username);
     await page.type("#password", password);
     await page.click("#kc-login");
@@ -121,7 +121,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     send("nombre", { nombreEstudiante });
 
     // Paso 4: Vista semanal
-    send("estado", { mensaje: "Cambiando a vista semanal..." });
+    send("estado", { mensaje: "Analizando horario" });
     await page.waitForSelector(".fc-timegrid-event-harness", {
       timeout: 60000,
     });
@@ -139,7 +139,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     send("semana", { semanaInfo });
 
     // Paso 6: Eventos
-    send("estado", { mensaje: "Extrayendo eventos..." });
+    send("estado", { mensaje: "Extrayendo eventos" });
     const eventos = await obtenerEventos(page);
 
     send("eventos", { eventos });
@@ -152,8 +152,8 @@ app.get("/api/eventos-stream", async (req, res) => {
       storageTypes: "local_storage,session_storage",
     });
 
-    await page.close(); // Solo cerramos la pestaña, el navegador global sigue abierto
-    send("fin", { mensaje: "Scraping finalizado ✅" });
+    await page.close(); 
+    send("fin", { mensaje: "finalizado" });
     res.end();
   } catch (error) {
     console.error("Error en SSE:", error);
