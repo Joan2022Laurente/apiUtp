@@ -110,12 +110,12 @@ app.get("/api/eventos-stream", async (req, res) => {
     send("nombre", { nombreEstudiante });
 
     // ✅ Paso 3: Obtener cursos antes del calendario
-    send("estado", { mensaje: "Extrayendo cursos..." });
+    send("estado", { mensaje: "Extrayendo cursos" });
     const cursos = await obtenerCursos(page);
     send("cursos", { cursos });
 
     // Paso 4: Ir al calendario
-    send("estado", { mensaje: "Abriendo calendario..." });
+    send("estado", { mensaje: "Abriendo calendario" });
     await page.goto("https://class.utp.edu.pe/student/calendar", {
       waitUntil: "networkidle2",
     });
