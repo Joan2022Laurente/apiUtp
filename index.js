@@ -6,6 +6,7 @@ import {
   obtenerEventos,
   obtenerNombreEstudiante,
   obtenerSemanaInfo,
+  obtenerCursos, // 👈 nuevo import
 } from "./subScrapper/subScrapper.js";
 
 const app = express();
@@ -18,10 +19,9 @@ app.use(
 );
 app.use(express.json());
 
-let isBusy = false; // Solo un usuario a la vez
-let browser; // Navegador global
+let isBusy = false;
+let browser;
 
-// Función para iniciar navegador si no existe
 async function getBrowser() {
   if (!browser) {
     chromium.setGraphicsMode = false;
@@ -43,9 +43,6 @@ async function getBrowser() {
   return browser;
 }
 
-// ===================================================
-// Ruta SSE con navegador persistente, cookies borradas, cache mantenida
-// ===================================================
 app.get("/api/eventos-stream", async (req, res) => {
   if (isBusy) {
     res.writeHead(503, { "Content-Type": "application/json" });
@@ -57,7 +54,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     );
   }
 
-  isBusy = true; // Bloquear servicio
+  isBusy = true;
 
   const { username, password } = req.query;
   if (!username || !password) {
@@ -81,17 +78,12 @@ app.get("/api/eventos-stream", async (req, res) => {
   };
 
   let page;
-
-  // Cancelar scraping si el cliente se desconecta
   req.on("close", async () => {
     console.log("Cliente desconectado, cancelando scraping...");
-    if (page) {
+    if (page)
       try {
         await page.close();
-      } catch (e) {
-        console.error(e);
-      }
-    }
+      } catch {}
     isBusy = false;
   });
 
@@ -102,24 +94,31 @@ app.get("/api/eventos-stream", async (req, res) => {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     );
 
-    // Paso 1: Navegar
-    send("estado", { mensaje: "Espere un momento" });
-    await page.goto("https://class.utp.edu.pe/student/calendar", {
+    // Paso 1: Login
+    send("estado", { mensaje: "Autenticando..." });
+    await page.goto("https://class.utp.edu.pe/student", {
       waitUntil: "networkidle2",
     });
     await page.waitForSelector("#username", { timeout: 30000 });
-
-    // Paso 2: Login
-    send("estado", { mensaje: "Autenticando" });
     await page.type("#username", username);
     await page.type("#password", password);
     await page.click("#kc-login");
     await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 });
 
-    // Paso 3: Nombre del estudiante
+    // Paso 2: Obtener nombre
     const nombreEstudiante = await obtenerNombreEstudiante(page);
     send("nombre", { nombreEstudiante });
 
+    // ✅ Paso 3: Obtener cursos antes del calendario
+    send("estado", { mensaje: "Extrayendo cursos..." });
+    const cursos = await obtenerCursos(page);
+    send("cursos", { cursos });
+
+    // Paso 4: Ir al calendario
+    send("estado", { mensaje: "Abriendo calendario..." });
+    await page.goto("https://class.utp.edu.pe/student/calendar", {
+      waitUntil: "networkidle2",
+    });
     // Paso 4: Vista semanal
     send("estado", { mensaje: "Analizando horario" });
     await page.waitForSelector(".fc-timegrid-event-harness", {
@@ -152,7 +151,7 @@ app.get("/api/eventos-stream", async (req, res) => {
       storageTypes: "local_storage,session_storage",
     });
 
-    await page.close(); 
+    await page.close();
     send("fin", { mensaje: "finalizado" });
     res.end();
   } catch (error) {

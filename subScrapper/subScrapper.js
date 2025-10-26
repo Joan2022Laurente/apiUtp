@@ -7,6 +7,38 @@ export async function obtenerNombreEstudiante(page) {
   });
 }
 
+export async function obtenerCursos(page) {
+  await page.waitForSelector('[data-testid="course-card-container"]', {
+    timeout: 30000,
+  });
+
+  return await page.evaluate(() => {
+    const cards = document.querySelectorAll(
+      '[data-testid="course-card-container"]'
+    );
+    const cursos = [];
+
+    cards.forEach((card) => {
+      const nombre =
+        card.querySelector(".font-black")?.innerText.trim().replace(/\s+/g, " ") || null;
+
+      const detalle =
+        card.querySelector(".text-small-02.lg\\:text-body.text-neutral-02")
+          ?.innerText.trim() || "";
+      const modalidad = detalle.includes("-")
+        ? detalle.split("-")[1].trim()
+        : detalle.trim();
+
+      const docente =
+        card.querySelector("p.text-small-02 span.capitalize")?.innerText.trim() || null;
+
+      cursos.push({ nombre, modalidad, docente });
+    });
+
+    return cursos;
+  });
+}
+
 export async function obtenerSemanaInfo(page) {
   return await page.evaluate(() => {
     const getTextByXPath = (xpath) => {
