@@ -13,7 +13,7 @@ export async function obtenerCursos(page) {
   });
 
   return await page.evaluate(() => {
-    // Selecciona el primer div con la clase especificada
+    // Selecciona el primer div con la clase especificadaa
     const container = document.querySelector('div.items-center.grid.mt-xxlg.sc-kvZOFW.ibxudr');
     if (!container) return [];
 
