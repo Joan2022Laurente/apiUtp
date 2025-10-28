@@ -95,7 +95,7 @@ app.get("/api/eventos-stream", async (req, res) => {
     );
 
     // Paso 1: Login
-    send("estado", { mensaje: "Autenticando..." });
+    send("estado", { mensaje: "Autenticando" });
     await page.goto("https://class.utp.edu.pe/student", {
       waitUntil: "networkidle2",
     });
