@@ -109,10 +109,14 @@ app.get("/api/eventos-stream", async (req, res) => {
     const nombreEstudiante = await obtenerNombreEstudiante(page);
     send("nombre", { nombreEstudiante });
 
-    // ✅ Paso 3: Obtener cursos antes del calendario
+    // ✅ Paso 3: Obtener cursos y actividades
     send("estado", { mensaje: "Extrayendo cursos" });
     const cursos = await obtenerCursos(page);
     send("cursos", { cursos });
+
+    send("estado", { mensaje: "Extrayendo tareas y actividades" });
+    const actividades = await obtenerActividadesSemanales(page);
+    send("actividades", { actividades });
 
     // Paso 4: Ir al calendario
     send("estado", { mensaje: "Abriendo calendario" });

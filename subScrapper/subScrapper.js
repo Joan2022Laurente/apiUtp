@@ -8,24 +8,40 @@ export async function obtenerNombreEstudiante(page) {
 }
 
 export async function obtenerCursos(page) {
-  await page.waitForSelector('div.items-center.grid.mt-xxlg.sc-kvZOFW.ibxudr', {
+  await page.waitForSelector("div.items-center.grid.mt-xxlg.sc-kvZOFW.ibxudr", {
     timeout: 30000,
   });
 
   return await page.evaluate(() => {
     // Selecciona el primer div con la clase especificadaa
-    const container = document.querySelector('div.items-center.grid.mt-xxlg.sc-kvZOFW.ibxudr');
+    const container = document.querySelector(
+      "div.items-center.grid.mt-xxlg.sc-kvZOFW.ibxudr"
+    );
     if (!container) return [];
 
     // Selecciona los cards dentro del contenedor
-    const cards = container.querySelectorAll('[data-testid="course-card-container"]');
+    const cards = container.querySelectorAll(
+      '[data-testid="course-card-container"]'
+    );
     const cursos = [];
 
     cards.forEach((card) => {
-      const nombre = card.querySelector(".font-black")?.innerText.trim().replace(/\s+/g, " ") || null;
-      const detalle = card.querySelector(".text-small-02.lg\\:text-body.text-neutral-02")?.innerText.trim() || "";
-      const modalidad = detalle.includes("-") ? detalle.split("-")[1].trim() : detalle.trim();
-      const docente = card.querySelector("p.text-small-02 span.capitalize")?.innerText.trim() || null;
+      const nombre =
+        card
+          .querySelector(".font-black")
+          ?.innerText.trim()
+          .replace(/\s+/g, " ") || null;
+      const detalle =
+        card
+          .querySelector(".text-small-02.lg\\:text-body.text-neutral-02")
+          ?.innerText.trim() || "";
+      const modalidad = detalle.includes("-")
+        ? detalle.split("-")[1].trim()
+        : detalle.trim();
+      const docente =
+        card
+          .querySelector("p.text-small-02 span.capitalize")
+          ?.innerText.trim() || null;
 
       cursos.push({ nombre, modalidad, docente });
     });
@@ -33,7 +49,6 @@ export async function obtenerCursos(page) {
     return cursos;
   });
 }
-
 
 export async function obtenerSemanaInfo(page) {
   return await page.evaluate(() => {
@@ -144,5 +159,89 @@ export async function obtenerEventos(page) {
       });
 
     return lista;
+  });
+}
+
+export async function obtenerActividadesSemanales(page) {
+  // Esperamos a que cargue el título de la sección para asegurar que el contenido está listo
+  // Si no aparece en 5 segundos, asumimos que no hay actividades o cargó diferente
+  try {
+    await page.waitForSelector('p[data-testid="title"]', { timeout: 5000 });
+  } catch (e) {
+    return []; // Retorna array vacío si no encuentra la sección
+  }
+
+  return await page.evaluate(() => {
+    // Seleccionamos todas las tarjetas que tienen el testid="card"
+    const cards = document.querySelectorAll('a[data-testid="card"]');
+    const actividades = [];
+
+    cards.forEach((card) => {
+      // 1. Obtener Link
+      const link = card.getAttribute("href") || "#";
+
+      // 2. Obtener Tipo (ej: Tarea calificada, Foro, etc.)
+      // Buscamos el primer span con icono y texto
+      const tipoElement = card.querySelector(".sc-epnACN p");
+      const tipo = tipoElement ? tipoElement.innerText.trim() : "Actividad";
+
+      // 3. Obtener Título de la Actividad
+      // Dentro de la clase sc-cmthru, a veces hay un div sc-esOvli con el texto completo
+      const tituloContainer = card.querySelector(".sc-cmthru");
+      const tituloInner = card.querySelector(".sc-esOvli");
+      const nombreActividad = tituloInner
+        ? tituloInner.innerText.trim()
+        : tituloContainer
+        ? tituloContainer.innerText.trim()
+        : "Sin nombre";
+
+      // 4. Obtener Estado (ej: Por entregar, Programada)
+      // El estado suele estar en el segundo span (sc-iQNlJl), en un <p> que NO es el título
+      const estadoContainer = card.querySelector(".sc-iQNlJl");
+      let estado = "Desconocido";
+      if (estadoContainer) {
+        // Buscamos un párrafo que tenga texto pero que no sea el título (sc-cmthru)
+        const estadoP = Array.from(estadoContainer.querySelectorAll("p")).find(
+          (p) => !p.classList.contains("sc-cmthru")
+        );
+        if (estadoP) {
+          estado = estadoP.innerText.trim();
+        } else {
+          // Fallback: Si no hay estructura interna clara, tomamos el texto del contenedor y quitamos el título
+          const fullText = estadoContainer.innerText;
+          estado = fullText.replace(nombreActividad, "").trim();
+        }
+      }
+
+      // 5. Obtener Curso
+      const cursoElement = card.querySelector(".sc-hZSUBg");
+      const curso = cursoElement
+        ? cursoElement.innerText.trim()
+        : "Curso general";
+
+      // 6. Obtener Fecha de Vencimiento / Info
+      const fechaElement = card.querySelector(".sc-cMhqgX .truncate");
+      const fechaLimite = fechaElement ? fechaElement.innerText.trim() : "";
+
+      // 7. Obtener Puntos (si existen)
+      const puntosElement =
+        card.querySelector(".sc-cMhqgX span + span") ||
+        card.querySelector(".sc-cMhqgX");
+      let puntos = "";
+      if (puntosElement && puntosElement.innerText.includes("pts")) {
+        puntos = puntosElement.innerText.split("pts")[0].trim() + " pts"; // extracción simple
+      }
+
+      actividades.push({
+        nombreActividad,
+        tipo,
+        curso,
+        estado,
+        fechaLimite,
+        link: `https://class.utp.edu.pe${link}`, // Aseguramos ruta absoluta
+      });
+    });
+
+    return actividades;
   });
 }
