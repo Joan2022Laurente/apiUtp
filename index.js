@@ -6,7 +6,8 @@ import {
   obtenerEventos,
   obtenerNombreEstudiante,
   obtenerSemanaInfo,
-  obtenerCursos, // 👈 nuevo import
+  obtenerCursos,
+  obtenerActividadesSemanales, // 👈 nuevo import
 } from "./subScrapper/subScrapper.js";
 
 const app = express();
